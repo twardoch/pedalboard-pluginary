@@ -60,11 +60,11 @@ This snippet will list all plugins that have been scanned and cached, as a JSON.
 
 - **Pedalboard Pluginary** is written by Adam Twardoch, with assistance from GPT-4.
 - Copyright (c) 2023 Adam Twardoch.
-- Licensed under the [Apache-2.0 license](./LICENSE.txt).
+- Licensed under the [Apache-2.0 license](https://raw.githubusercontent.com/twardoch/pedalboard-pluginary/main/LICENSE.txt).
 - _Pedalboard Pluginary_ is not affiliated with [Pedalboard](https://github.com/spotify/pedalboard) or Spotify.
 
 ## Contributing
 
 - If you encounter any issues or have suggestions, feel free to open an [issue](https://github.com/twardoch/pedalboard-pluginary/issues) on GitHub. 
-- If you find that some plugins are not working with Pedalboard, open an issue that lists the key, which is the plugin type and the base filename, like `"aufx/CoreAudio"` or `"vst3/RX 10 Connect"`. You can also modify the [`default_ignores.json`](src/pedalboard_pluginary/resources/default_ignores.json) file and submit a pull request.
+- If you find that some plugins are not working with Pedalboard, open an issue that lists the key, which is the plugin type and the base filename, like `"aufx/CoreAudio"` or `"vst3/RX 10 Connect"`. You can also modify the [`default_ignores.json`](https://raw.githubusercontent.com/twardoch/pedalboard-pluginary/main/src/pedalboard_pluginary/resources/default_ignores.json) file, and submit a pull request.
 - If you want to contribute code, please open a pull request. 
