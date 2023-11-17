@@ -1,6 +1,6 @@
 # Pedalboard Pluginary
 
-_Pedalboard Pluginary_ is a Python-based package and command-line tool that scans and lists VST-3 plugins on macOS and Windows, and Audio Unit (AU) plugins on macOS. It’s intended as a companion for the [Pedalboard Python library](https://github.com/spotify/pedalboard) by Spotify. 
+_Pedalboard Pluginary_ is an independent Python-based package and command-line tool that scans and lists VST-3 plugins on macOS and Windows, and Audio Unit (AU) plugins on macOS. It’s intended as a companion for the _[Pedalboard](https://github.com/spotify/pedalboard)_ Python library by Spotify, but it’s not affiliated with _Pedalboard_ or Spotify.
 
 ## Features
 
@@ -41,7 +41,7 @@ After installation, you can use `pbpluginary` from the command line.
 
 ## Python usage
 
-You can use Pedalboard Pluginary as a library in your Python scripts. Here's a quick example:
+You can use _Pedalboard Pluginary_ as a library in your Python scripts. Here's a quick example:
 
 ```python
 from pedalboard_pluginary import PedalboardPluginary
@@ -61,7 +61,7 @@ This snippet will list all plugins that have been scanned and cached, as a JSON.
 - **Pedalboard Pluginary** is written by Adam Twardoch, with assistance from GPT-4.
 - Copyright (c) 2023 Adam Twardoch.
 - Licensed under the [Apache-2.0 license](./LICENSE.txt).
-- Pedalboard Pluginary is not affiliated with Pedalboard or Spotify.
+- _Pedalboard Pluginary_ is not affiliated with [Pedalboard](https://github.com/spotify/pedalboard) or Spotify.
 
 ## Contributing
 
