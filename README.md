@@ -54,6 +54,7 @@ This snippet will list all plugins that have been scanned and cached, as a JSON.
 
 ## Changes
 
+- **v1.1.0**: Added `update` CLI command which only scans plugins that aren’t cached yet. Not perfect. Added `json` and `yaml` CLI commands. Additional refactorings. 
 - **v1.0.0**: Initial release with basic scanning and listing of both VST-3 and AU plugins, and command-line interface for easy interaction.
 
 ## License
