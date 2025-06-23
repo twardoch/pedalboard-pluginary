@@ -60,6 +60,28 @@ repos:
   ## You can add flake8 plugins via `additional_dependencies`:
   #  additional_dependencies: [flake8-bugbear]
 
+- repo: https://github.com/pre-commit/mirrors-mypy
+  rev: v1.7.0 # Or choose the latest version
+  hooks:
+  - id: mypy
+    # You might need to specify `additional_dependencies` for mypy to find your project's dependencies
+    # e.g., additional_dependencies: [types-setuptools, types-requests]
+    # For this project:
+    additional_dependencies: [
+      types-setuptools, # For pkg_resources, etc.
+      # Add stubs for other dependencies if mypy complains and they exist
+      # types-fire, types-tqdm, types-python-benedict might not exist or be mature.
+      # For now, we'll rely on inline # type: ignore for problematic libs
+      # and the mypy config in pyproject.toml for global settings.
+      "pedalboard", # To make mypy aware of pedalboard, even if it has no stubs
+      "fire",
+      "tqdm",
+      "python-benedict"
+    ]
+    # It's good practice to also configure mypy via pyproject.toml or mypy.ini
+    # For example, to specify the Python version, follow imports, etc.
+    args: [--config-file=pyproject.toml] # Point to pyproject.toml for config
+
 ## Check for misspells in documentation files:
 # - repo: https://github.com/codespell-project/codespell
 #   rev: v2.2.5

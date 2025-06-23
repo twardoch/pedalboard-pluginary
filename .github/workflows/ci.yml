@@ -22,10 +22,18 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install fire pytest
-    - name: Run tests
+        pip install fire pytest pytest-cov # Added pytest-cov for coverage
+    - name: Run tests with coverage
       run: |
         python -m pip install -e .
+        # Pytest is configured in pyproject.toml to run with --cov
+        # and output to term-missing. It also creates .coverage file.
+        pytest
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        # token: ${{ secrets.CODECOV_TOKEN }} # Only if needed for private repos or specific cases
+        fail_ci_if_error: true # Optional: fail CI if coverage upload fails
 
   publish:
     needs: build-and-test

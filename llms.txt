@@ -1,0 +1,1455 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.github/
+  workflows/
+    ci.yml
+src/
+  pedalboard_pluginary/
+    resources/
+      default_ignores.json
+    __init__.py
+    __main__.py
+    core.py
+    data.py
+    scanner.py
+    utils.py
+tests/
+  test_data.py
+  test_utils.py
+.coveragerc
+.gitignore
+.isort.cfg
+.pre-commit-config.yaml
+AUTHORS.md
+LICENSE.txt
+pyproject.toml
+README.md
+tox.ini
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".github/workflows/ci.yml">
+name: Python package CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11']
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install fire pytest
+    - name: Run tests
+      run: |
+        python -m pip install -e .
+
+  publish:
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    - name: Build and publish
+      env:
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+      run: |
+        python -m pip install --upgrade build twine
+        python -m build
+        twine upload dist/*
+</file>
+
+<file path="src/pedalboard_pluginary/resources/default_ignores.json">
+[
+    "aufx/ANIMATE",
+    "aufx/AudioDSP",
+    "aufx/CoreAudio",
+    "aufx/Dynamics",
+    "aufx/iZNectar4Auto-LevelAUHook",
+    "aufx/iZNeutron4AUHook",
+    "aufx/iZNeutron4CompressorAUHook",
+    "aufx/iZNeutron4EqualizerAUHook",
+    "aufx/iZNeutron4ExciterAUHook",
+    "aufx/iZNeutron4GateAUHook",
+    "aufx/iZNeutron4SculptorAUHook",
+    "aufx/iZNeutron4TransientShaperAUHook",
+    "aufx/iZNeutron4UnmaskAUHook",
+    "aufx/iZRX10ConnectAUHook",
+    "aufx/iZRelayAUHook",
+    "aufx/smartEQ3",
+    "aufx/smartcomp2",
+    "aufx/smartgate",
+    "aufx/unknown URL",
+    "vst3/RX 10 Connect",
+    "vst3/RX 10 Repair Assistant",
+    "vst3/smartEQ3"
+]
+</file>
+
+<file path="tests/test_data.py">
+import os
+from pedalboard_pluginary.data import get_cache_path
+from unittest.mock import patch
+
+def test_get_cache_path_windows():
+    with patch.dict(os.environ, {"APPDATA": "C:\\Users\\TestUser\\AppData"}):
+        path = get_cache_path("test_cache")
+        assert str(path) == "C:\\Users\\TestUser\\AppData\\com.twardoch.pedalboard-pluginary\\test_cache.json"
+
+def test_get_cache_path_non_windows():
+    with patch.dict(os.environ, {}, clear=True):
+        path = get_cache_path("test_cache")
+        home = os.path.expanduser("~")
+        expected_path = f"{home}/Library/Application Support/com.twardoch.pedalboard-pluginary/test_cache.json"
+        assert str(path) == expected_path
+</file>
+
+<file path="tests/test_utils.py">
+import pytest
+from pedalboard_pluginary.utils import ensure_folder
+from pathlib import Path
+
+def test_ensure_folder(tmp_path):
+    test_folder = tmp_path / "test_folder"
+    ensure_folder(test_folder)
+    assert test_folder.exists()
+</file>
+
+<file path=".coveragerc">
+# .coveragerc to control coverage.py
+[run]
+branch = True
+source = pedalboard_pluginary
+# omit = bad_file.py
+
+[paths]
+source =
+    src/
+    */site-packages/
+
+[report]
+# Regexes for lines to exclude from consideration
+exclude_lines =
+    # Have to re-enable the standard pragma
+    pragma: no cover
+
+    # Don't complain about missing debug-only code:
+    def __repr__
+    if self\.debug
+
+    # Don't complain if tests don't hit defensive assertion code:
+    raise AssertionError
+    raise NotImplementedError
+
+    # Don't complain if non-runnable code isn't run:
+    if 0:
+    if __name__ == .__main__.:
+</file>
+
+<file path=".gitignore">
+temp/
+
+# Temporary and binary files
+*~
+*.py[cod]
+*.so
+*.cfg
+!.isort.cfg
+!setup.cfg
+*.orig
+*.log
+*.pot
+__pycache__/*
+.cache/*
+.*.swp
+*/.ipynb_checkpoints/*
+.DS_Store
+
+# Project files
+.ropeproject
+.project
+.pydevproject
+.settings
+.idea
+.vscode
+tags
+
+# Package files
+*.egg
+*.eggs/
+.installed.cfg
+*.egg-info
+
+# Unittest and coverage
+htmlcov/*
+.coverage
+.coverage.*
+.tox
+junit*.xml
+coverage.xml
+.pytest_cache/
+
+# Build and docs folder/files
+build/*
+dist/*
+sdist/*
+docs/api/*
+docs/_rst/*
+docs/_build/*
+cover/*
+MANIFEST
+
+# Per-project virtualenvs
+.venv*/
+.conda*/
+.python-version
+</file>
+
+<file path=".isort.cfg">
+[settings]
+profile = black
+known_first_party = pedalboard_pluginary
+</file>
+
+<file path="AUTHORS.md">
+# Contributors
+
+* Adam Twardoch <adam+github@twardoch.com>
+</file>
+
+<file path="LICENSE.txt">
+Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "{}"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright {yyyy} {name of copyright owner}
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+</file>
+
+<file path="README.md">
+# Pedalboard Pluginary
+
+_Pedalboard Pluginary_ is an independent Python-based package and command-line tool that scans and lists VST-3 plugins on macOS and Windows, and Audio Unit (AU) plugins on macOS. It’s intended as a companion for the _[Pedalboard](https://github.com/spotify/pedalboard)_ Python library by Spotify, but it’s not affiliated with _Pedalboard_ or Spotify.
+
+## Features
+
+With _Pedalboard Pluginary_, you can scan and list VST-3 and AU audio plugins installed on your machine, including their default parameters.
+
+- It automatically scans and catalogs VST-3 and AU plugins installed on your system.
+- Provides a command-line interface (CLI) for quick access to your plugin library.
+- Saves the plugin information in a JSON file. This file has the information about the plugin parameters and their default values.
+- Works on Windows and macOS (Windows is currently untested).
+- It bundles an `ignores.json` file, which “blacklists” some plugins that are known to cause issues with Pedalboard. It will not scan these, and will not include them in the cache. If you find that some plugins are not working with Pedalboard, you can add them to your `ignores.json` file. See “Contributing” section below.
+
+## Future plans
+
+I plan to extend the package with another functionality, “jobs”, which will allow to load a stack of plugins with their parameter values from a dictionary or JSON file, and run them in a batch using Pedalboard.
+
+## Installation
+
+To install _Pedalboard Pluginary_, run:
+
+```bash
+python3 -m pip install --upgrade pedalboard-pluginary
+```
+
+For the current development version:
+
+```bash
+python3 -m pip install --upgrade git+https://github.com/twardoch/pedalboard-pluginary
+```
+
+## Command-line usage
+
+After installation, you can use `pbpluginary` from the command line.
+
+### Commands:
+
+- `pbpluginary list` displays the plugin information stored in the cache, as a JSON. If no cache exists, it will scan your system and create the cache.
+- `pbpluginary scan` scans all available plugins, and caches the information. Run this if you’ve installed or upgraded some VST-3 or AU plugins.
+
+## Python usage
+
+You can use _Pedalboard Pluginary_ as a library in your Python scripts. Here's a quick example:
+
+```python
+from pedalboard_pluginary import PedalboardPluginary
+
+pluginary = PedalboardPluginary()
+print(pluginary.list_plugins())
+```
+
+This snippet will list all plugins that have been scanned and cached, as a JSON.
+
+## Changes
+
+- **v1.1.0**: Added `update` CLI command which only scans plugins that aren’t cached yet. Not perfect. Added `json` and `yaml` CLI commands. Additional refactorings.
+- **v1.0.0**: Initial release with basic scanning and listing of both VST-3 and AU plugins, and command-line interface for easy interaction.
+
+## License
+
+- **Pedalboard Pluginary** is written by Adam Twardoch, with assistance from GPT-4.
+- Copyright (c) 2023 Adam Twardoch.
+- Licensed under the [Apache-2.0 license](https://raw.githubusercontent.com/twardoch/pedalboard-pluginary/main/LICENSE.txt).
+- _Pedalboard Pluginary_ is not affiliated with [Pedalboard](https://github.com/spotify/pedalboard) or Spotify.
+
+## Contributing
+
+- If you encounter any issues or have suggestions, feel free to open an [issue](https://github.com/twardoch/pedalboard-pluginary/issues) on GitHub.
+- If you find that some plugins are not working with Pedalboard, open an issue that lists the key, which is the plugin type and the base filename, like `"aufx/CoreAudio"` or `"vst3/RX 10 Connect"`. You can also modify the [`default_ignores.json`](https://raw.githubusercontent.com/twardoch/pedalboard-pluginary/main/src/pedalboard_pluginary/resources/default_ignores.json) file, and submit a pull request.
+- If you want to contribute code, please open a pull request.
+</file>
+
+<file path="tox.ini">
+# Tox configuration file
+# Read more under https://tox.wiki/
+# THIS SCRIPT IS SUPPOSED TO BE AN EXAMPLE. MODIFY IT ACCORDING TO YOUR NEEDS!
+
+[tox]
+minversion = 3.24
+envlist = default
+isolated_build = True
+
+[testenv]
+description = Invoke pytest to run automated tests
+setenv =
+    TOXINIDIR = {toxinidir}
+passenv =
+    HOME
+    SETUPTOOLS_*
+extras =
+    testing
+commands =
+    pytest {posargs}
+
+# To run `tox -e lint` you need to make sure you have a
+# `.pre-commit-config.yaml` file. See https://pre-commit.com
+# [testenv:lint]
+# description = Perform static analysis and style checks
+# skip_install = True
+# deps = pre-commit
+# passenv =
+#     HOMEPATH
+#     PROGRAMDATA
+#     SETUPTOOLS_*
+# commands =
+#     pre-commit run --all-files {posargs:--show-diff-on-failure}
+
+[testenv:{build,clean}]
+description =
+    build: Build the package in isolation according to PEP517, see https://github.com/pypa/build
+    clean: Remove old distribution files and temporary build artifacts (./build and ./dist)
+skip_install = True
+changedir = {toxinidir}
+deps =
+    build: build[virtualenv]
+passenv =
+    SETUPTOOLS_*
+commands =
+    clean: python -c 'import shutil; [shutil.rmtree(p, True) for p in ("build", "dist")]'
+    clean: python -c 'import pathlib, shutil; [shutil.rmtree(p, True) for p in pathlib.Path("src").glob("*.egg-info")]'
+    build: python -m build {posargs}
+
+[testenv:publish]
+description =
+    Publish the package you have been developing to a package index server.
+    By default, it uses testpypi. If you really want to publish your package
+    to be publicly accessible in PyPI, use the `-- --repository pypi` option.
+skip_install = True
+changedir = {toxinidir}
+passenv =
+    TWINE_USERNAME
+    TWINE_PASSWORD
+    TWINE_REPOSITORY
+    TWINE_REPOSITORY_URL
+deps = twine
+commands =
+    python -m twine check dist/*
+    python -m twine upload {posargs:--repository {env:TWINE_REPOSITORY:testpypi}} dist/*
+</file>
+
+<file path="src/pedalboard_pluginary/__init__.py">
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    # Change here if project is renamed and does not equal the package name
+    dist_name = __name__
+    __version__ = version(dist_name)
+except PackageNotFoundError:  # pragma: no cover
+    __version__ = "unknown"
+finally:
+    del version, PackageNotFoundError
+
+from .core import PedalboardPluginary
+</file>
+
+<file path="src/pedalboard_pluginary/__main__.py">
+#!/usr/bin/env python3
+import fire # type: ignore[import-untyped]
+# fire library might not have complete type stubs, common to ignore if problematic for mypy.
+# Consider adding types-fire if available and it resolves issues.
+
+from typing import Optional, List, Any, Callable, Dict
+import sys # For sys.stdout in Display lambda
+
+from .core import PedalboardPluginary
+from .scanner import PedalboardScanner
+from benedict import benedict as bdict # type: ignore[import-untyped]
+# benedict might also lack stubs.
+import logging # For basicConfig
+
+# Define a more specific type for extra_folders if it's always List[str] after split
+ExtraFoldersType = Optional[List[str]]
+
+def setup_logging(verbose_level: int = 0) -> None:
+    """Configures basic logging for CLI output."""
+    # verbose_level: 0 = WARNING, 1 = INFO, 2 = DEBUG
+    log_level = logging.WARNING
+    if verbose_level == 1:
+        log_level = logging.INFO
+    elif verbose_level >= 2:
+        log_level = logging.DEBUG
+
+    # Only configure if no handlers are already set (e.g., by tests or other imports)
+    # This basicConfig will go to stderr by default for WARNING and above.
+    # For INFO, let's direct to stdout for better CLI experience.
+    if not logging.getLogger().hasHandlers():
+        if log_level <= logging.INFO:
+            # For INFO and DEBUG, use a more verbose format and stdout
+            logging.basicConfig(stream=sys.stdout, level=log_level,
+                                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        else:
+            # For WARNING, ERROR, CRITICAL, use stderr and simpler format
+            logging.basicConfig(level=log_level,
+                                format="%(levelname)s: %(name)s: %(message)s")
+
+
+def scan_plugins_cli(extra_folders: Optional[str] = None, verbose: int = 0) -> None:
+    """Scans all plugins, optionally including extra folders (comma-separated string)."""
+    folders_list: ExtraFoldersType = extra_folders.split(",") if extra_folders else None
+    # The original code passes extra_folders=None to rescan, which seems like a bug.
+    # It should pass folders_list.
+    setup_logging(verbose)
+    PedalboardScanner().rescan(extra_folders=folders_list)
+
+
+def update_plugins_cli(extra_folders: Optional[str] = None, verbose: int = 0) -> None:
+    """Updates plugin list, optionally including extra folders (comma-separated string)."""
+    setup_logging(verbose)
+    folders_list: ExtraFoldersType = extra_folders.split(",") if extra_folders else None
+    # Similar to scan_plugins, original code passes extra_folders=None to update.
+    # It should pass folders_list.
+    PedalboardScanner().update_scan(extra_folders=folders_list) # Changed to update_scan
+
+
+def list_json_cli(verbose: int = 0) -> str:
+    """Lists all plugins in JSON format."""
+    setup_logging(verbose)
+    return bdict(PedalboardPluginary().plugins).to_json()
+
+
+def list_yaml_cli(verbose: int = 0) -> str:
+    """Lists all plugins in YAML format."""
+    setup_logging(verbose)
+    return bdict(PedalboardPluginary().plugins).to_yaml()
+
+
+def main_cli() -> None: # Renamed from cli to avoid conflict if fire creates a 'cli' command
+    """Main CLI entry point. Call with --verbose=1 for INFO, --verbose=2 for DEBUG logs."""
+    # Adjusting fire.core.Display to be type-friendly if possible, or type: ignore it.
+    # The lambda itself is: `lambda lines, out: print(*lines, file=out)`
+    # `lines` is usually a tuple of strings, `out` is a file-like object.
+    display_lambda: Callable[[tuple[str, ...], Any], None] = lambda lines, out: print(*lines, file=out)
+    fire.core.Display = display_lambda # type: ignore[attr-defined]
+
+    # Fire will automatically expose methods of an object, or items in a dict.
+    # We can pass the functions directly. Fire handles the --verbose flag if it's an arg in functions.
+    fire_commands: Dict[str, Callable[..., Any]] = {
+            "scan": scan_plugins_cli,       # Connects to scan_plugins_cli(extra_folders=None, verbose=0)
+            "update": update_plugins_cli,   # Connects to update_plugins_cli(extra_folders=None, verbose=0)
+            "list": list_json_cli,          # Default 'list' command
+            "json": list_json_cli,          # Explicit 'json' command
+            "yaml": list_yaml_cli,
+        }
+    fire.Fire(fire_commands)
+
+
+if __name__ == "__main__":
+    main_cli()
+</file>
+
+<file path="src/pedalboard_pluginary/core.py">
+import json
+from pathlib import Path
+from typing import Dict, Any
+from .data import load_json_file, get_cache_path
+from .scanner import PedalboardScanner
+
+class PedalboardPluginary:
+    plugins_path: Path
+    plugins: Dict[str, Any] # Assuming plugin names (keys) are strings
+
+    def __init__(self) -> None:
+        self.plugins_path = get_cache_path("plugins")
+        self.plugins = {} # Initialize to empty dict
+        self.load_data()
+
+    def load_data(self) -> None:
+        if not self.plugins_path.exists():
+            scanner = PedalboardScanner()
+            scanner.scan() # This will create and save the plugins file
+
+        # Ensure plugins are loaded even if scan wasn't needed or if it just ran
+        # load_json_file returns Dict[Any, Any], but we expect Dict[str, Any] for plugins
+        loaded_plugins = load_json_file(self.plugins_path)
+        if isinstance(loaded_plugins, dict):
+            self.plugins = loaded_plugins
+        else:
+            # This case should ideally not happen if save_json_file and load_json_file are robust
+            self.plugins = {}
+
+
+    def list_plugins(self) -> str:
+        """Returns a JSON string representation of the plugins."""
+        return json.dumps(self.plugins, indent=4)
+</file>
+
+<file path="src/pedalboard_pluginary/data.py">
+import json
+import os
+import shutil
+from pathlib import Path
+from typing import Any, Dict, List, Set
+from pkg_resources import resource_filename # type: ignore[import-untyped]
+# Mypy might complain about pkg_resources not having stubs or being untyped.
+# If official stubs (e.g., types-setuptools) don't cover it well,
+# a type: ignore might be necessary for this line in a strict mypy environment.
+# For now, assuming it might need an ignore or that types-setuptools covers it.
+
+from .utils import ensure_folder
+
+APP_NAME: str = "com.twardoch.pedalboard-pluginary"
+
+def get_cache_path(cache_name: str) -> Path:
+    """ Get the path to a cache file. """
+    app_data_dir: Path
+    if os.name == "nt":
+        app_data_env = os.getenv("APPDATA")
+        if app_data_env is None:
+            # Fallback or error if APPDATA is not set, though it usually is on Windows.
+            # For simplicity, let's assume it's set, or Path will handle it.
+            # A more robust solution would handle app_data_env being None.
+            app_data_dir = Path(os.path.expanduser("~")) / "AppData" / "Roaming" / APP_NAME
+        else:
+            app_data_dir = Path(app_data_env) / APP_NAME
+    else:
+        # macOS and Linux typically use XDG Base Directory Specification or specific paths.
+        # The original code uses macOS specific path.
+        # For broader compatibility, consider XDG paths on Linux.
+        # Current implementation matches original:
+        app_data_dir = Path.home() / "Library" / "Application Support" / APP_NAME
+
+    app_data_dir.mkdir(parents=True, exist_ok=True) # Ensure base app dir exists
+    return app_data_dir / f"{cache_name}.json"
+
+def load_json_file(file_path: Path) -> Dict[Any, Any]: # Or more specific if structure is known
+    """ Load JSON data from a file. """
+    if file_path.exists():
+        with open(file_path, 'r', encoding='utf-8') as file:
+            try:
+                return json.load(file)
+            except json.JSONDecodeError:
+                return {} # Return empty dict if JSON is corrupted
+    return {}
+
+def save_json_file(data: Dict[Any, Any], file_path: Path) -> None: # Or list/Any for data
+    """ Save JSON data to a file. """
+    ensure_folder(file_path) # Ensures parent directory exists
+    with open(file_path, 'w', encoding='utf-8') as file:
+        json.dump(data, file, indent=4)
+
+def load_ignores(ignores_path: Path) -> Set[str]:
+    """ Load ignores data (list of strings) from the file. """
+    content = load_json_file(ignores_path)
+    if isinstance(content, list): # Expects a list of strings
+        return set(item for item in content if isinstance(item, str))
+    return set()
+
+def save_ignores(ignores: Set[str], ignores_path: Path) -> None:
+    """ Save ignores data to the file. """
+    save_json_file(sorted(list(ignores)), ignores_path)
+
+def copy_default_ignores(destination_path: Path) -> None:
+    """ Copy the default ignores file to the destination if it does not exist. """
+    # __name__ here refers to 'pedalboard_pluginary.data'
+    # resource_filename gets path to a resource within the package
+    default_ignores_src_path_str: str = resource_filename('pedalboard_pluginary', 'resources/default_ignores.json')
+    default_ignores_src_path: Path = Path(default_ignores_src_path_str)
+
+    if not destination_path.exists():
+        ensure_folder(destination_path) # Ensures parent directory exists
+        if default_ignores_src_path.exists():
+            shutil.copy(default_ignores_src_path, destination_path)
+        else:
+            # Fallback: create an empty list if source is missing for some reason
+            save_json_file([], destination_path)
+</file>
+
+<file path="src/pedalboard_pluginary/scanner.py">
+import re
+import os
+import platform
+import subprocess
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+import itertools
+import logging
+import pedalboard # type: ignore[import-untyped]
+# pedalboard might not have complete type stubs.
+from tqdm import tqdm # type: ignore[import-untyped]
+# tqdm might not have complete type stubs.
+
+from typing import List, Dict, Any, Optional, Set, Union, Type, Pattern
+# Union for from_pb_param, Type for plugin_loader classes
+
+from .data import (
+    load_json_file,
+    save_json_file,
+    get_cache_path,
+    load_ignores,
+    copy_default_ignores,
+)
+from .utils import ensure_folder, from_pb_param
+
+# Removed basicConfig from here; application/CLI should configure it.
+logger: logging.Logger = logging.getLogger(__name__)
+
+# Define a type alias for plugin dictionaries for clarity
+PluginDict = Dict[str, Any] # More specific structure: name, path, filename, type, params
+ParamDict = Dict[str, Union[float, bool, str]]
+
+# Type alias for Pedalboard plugin classes
+PedalboardPluginType = Type[Union[pedalboard.AudioUnitPlugin, pedalboard.VST3Plugin]]
+
+
+class PedalboardScanner:
+    RE_AUFX: Pattern[str] = re.compile(r"aufx\s+(\w+)\s+(\w+)\s+-\s+(.*?):\s+(.*?)\s+\((.*?)\)")
+
+    plugins_path: Path
+    plugins: PluginDict
+    ignores_path: Path
+    ignores: Set[str]
+    safe_save: bool
+
+    def __init__(self) -> None:
+        self.plugins_path = get_cache_path("plugins")
+        self.plugins = {}
+        self.safe_save = True # If true, saves after each plugin sub-scan
+        self.ensure_ignores()
+
+    def ensure_ignores(self) -> None:
+        self.ignores_path = get_cache_path("ignores")
+        if not self.ignores_path.exists():
+            copy_default_ignores(self.ignores_path)
+        self.ignores = load_ignores(self.ignores_path)
+
+    def save_plugins(self) -> None:
+        ensure_folder(self.plugins_path)
+        # Sort plugins by key (plugin name) for consistent output
+        sorted_plugins = dict(sorted(self.plugins.items()))
+        save_json_file(sorted_plugins, self.plugins_path)
+
+    def _list_aufx_plugins(self) -> List[str]:
+        """Lists Audio Unit plugins using auval. Returns list of lines from auval output."""
+        try:
+            result = subprocess.run(
+                ["auval", "-l"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=True,
+            )
+            return result.stdout.splitlines()
+        except (subprocess.CalledProcessError, FileNotFoundError) as e: # Added FileNotFoundError
+            logger.error(f"Error running auval (is it installed and in PATH?): {e}")
+            return []
+
+    def _find_aufx_plugins(self, plugin_paths: Optional[List[Path]] = None) -> List[Path]:
+        """Finds resolvable paths to AUFX plugins, respecting ignores."""
+        resolved_plugin_paths: Optional[List[Path]] = [p.resolve() for p in plugin_paths] if plugin_paths else None
+
+        aufx_plugin_files: List[Path] = []
+        plugin_type: str = "aufx"
+
+        for line in self._list_aufx_plugins():
+            match = self.RE_AUFX.match(line)
+            if match:
+                (
+                    _plugin_code, # plugin_code not used
+                    _vendor_code, # vendor_code not used
+                    _vendor_name, # vendor_name not used
+                    _plugin_name, # plugin_name not used
+                    plugin_url,
+                ) = match.groups()
+                try:
+                    parsed_url = urlparse(plugin_url)
+                    plugin_path_str = unquote(parsed_url.path)
+                    if not plugin_path_str: # Skip if path is empty
+                        continue
+                    plugin_path = Path(plugin_path_str).resolve()
+                except Exception as e: # Catch potential errors in parsing/resolving
+                    logger.warning(f"Could not parse/resolve AUFX plugin URL '{plugin_url}': {e}")
+                    continue
+
+                plugin_fn: str = plugin_path.stem
+                plugin_key: str = f"{plugin_type}/{plugin_fn}"
+
+                if plugin_key not in self.ignores:
+                    if resolved_plugin_paths and plugin_path not in resolved_plugin_paths:
+                        continue
+                    aufx_plugin_files.append(plugin_path)
+        return aufx_plugin_files
+
+    def _get_vst3_folders(self, extra_folders: Optional[List[str]] = None) -> List[Path]:
+        """Gets standard VST3 plugin folders for the current OS, plus any extra_folders."""
+        os_name: str = platform.system()
+        folders: List[Path] = []
+
+        program_files = os.getenv("ProgramFiles", "C:\\Program Files")
+        program_files_x86 = os.getenv("ProgramFiles(x86)", "C:\\Program Files (x86)")
+
+        if os_name == "Windows":
+            folders = [
+                Path(program_files) / "Common Files" / "VST3",
+                Path(program_files_x86) / "Common Files" / "VST3",
+            ]
+        elif os_name == "Darwin":  # macOS
+            folders = [
+                Path("~/Library/Audio/Plug-Ins/VST3").expanduser(),
+                Path("/Library/Audio/Plug-Ins/VST3"),
+            ]
+        elif os_name == "Linux":
+            folders = [
+                Path("~/.vst3").expanduser(),
+                Path("/usr/lib/vst3"),
+                Path("/usr/local/lib/vst3"),
+            ]
+
+        if extra_folders:
+            folders.extend(Path(p) for p in extra_folders)
+
+        return [folder.resolve() for folder in folders if folder.exists() and folder.is_dir()]
+
+
+    def _find_vst3_plugins(self, extra_folders: Optional[List[str]] = None, plugin_paths: Optional[List[Path]] = None) -> List[Path]:
+        """Finds paths to VST3 plugins, respecting ignores."""
+        vst3_plugin_files: List[Path] = []
+        plugin_type: str = "vst3"
+
+        search_paths: List[Path]
+        if plugin_paths:
+            search_paths = [p.resolve() for p in plugin_paths]
+        else:
+            search_paths = list(
+                itertools.chain.from_iterable(
+                    folder.glob(f"*.{plugin_type}") # type: ignore[misc] # Path.glob issue with mypy?
+                    for folder in self._get_vst3_folders(extra_folders=extra_folders)
+                )
+            )
+
+        for plugin_path in search_paths:
+            if not plugin_path.is_file(): # Ensure it's a file
+                continue
+            plugin_fn: str = plugin_path.stem
+            plugin_key: str = f"{plugin_type}/{plugin_fn}"
+            if plugin_key not in self.ignores:
+                vst3_plugin_files.append(plugin_path)
+        return vst3_plugin_files
+
+    def get_plugin_params(self, plugin_path: Path, plugin_name: Optional[str]) -> ParamDict:
+        """Loads a plugin and returns its parameters."""
+        try:
+            # str(plugin_path) is required by pedalboard
+            plugin = pedalboard.load_plugin(str(plugin_path), plugin_name=plugin_name)
+            plugin_params: ParamDict = {
+                k: from_pb_param(getattr(plugin, k)) for k in plugin.parameters.keys()
+            }
+            return plugin_params
+        except Exception as e:
+            logger.error(f"Could not load/introspect plugin '{plugin_name or plugin_path.stem}' from '{plugin_path}': {e}")
+            return {}
+
+
+    def scan_single_plugin_file(
+        self, plugin_type: str, plugin_path: Path, plugin_loader: PedalboardPluginType
+    ) -> None:
+        """Scans a single plugin file which might contain multiple plugin definitions."""
+        plugin_path_str = str(plugin_path) # pedalboard expects string paths
+        plugin_fn = plugin_path.stem
+
+        try:
+            # Use get_plugin_names_from_file if available (newer pedalboard), or handle single.
+            # Assuming plugin_loader (e.g. pedalboard.VST3Plugin) has this method.
+            # This method might not exist or work the same for all plugin types/loaders.
+            plugin_names_in_file: List[Optional[str]]
+            if hasattr(plugin_loader, 'get_plugin_names_from_file'):
+                 plugin_names_in_file = plugin_loader.get_plugin_names_from_file(plugin_path_str) # type: ignore
+            else: # Fallback for older pedalboard or loaders without this
+                 plugin_names_in_file = [None] # Try to load by path, assuming one plugin or default
+
+            if not plugin_names_in_file: # If list is empty (e.g. bad file)
+                logger.warning(f"No plugin names found in file: {plugin_path_str}")
+                return
+
+            for plugin_name_variant in plugin_names_in_file:
+                # If plugin_name_variant is None, it means pedalboard will try to load the default plugin from the file.
+                # The actual key for self.plugins should ideally be unique and descriptive.
+                # Using plugin_name_variant if available, else a generated one.
+
+                actual_plugin_name_to_check: str
+                if plugin_name_variant:
+                    actual_plugin_name_to_check = plugin_name_variant
+                else:
+                    # This might not be unique if multiple files have same stem and no explicit name
+                    actual_plugin_name_to_check = f"{plugin_fn} (default)"
+
+                if actual_plugin_name_to_check in self.plugins: # Check against a potentially more robust key
+                    continue
+
+                plugin_params = self.get_plugin_params(plugin_path, plugin_name_variant)
+                if not plugin_params and not plugin_name_variant: # If get_plugin_params failed for default
+                    # This might indicate the file itself is problematic or not a plugin
+                    logger.warning(f"Failed to get params for default plugin in {plugin_path_str}")
+                    continue
+
+                # Determine the plugin name to use for storage.
+                # If pedalboard provides a name after loading (e.g. from plugin.name), use that.
+                # For now, we use plugin_name_variant or generate one.
+                final_plugin_name_for_storage = actual_plugin_name_to_check # Revisit if this leads to clashes
+
+                plugin_entry: PluginDict = {
+                    "name": final_plugin_name_for_storage, # This should be the name pedalboard identifies
+                    "path": plugin_path_str,
+                    "filename": plugin_fn,
+                    "type": plugin_type,
+                    "params": plugin_params,
+                }
+                # The key for self.plugins should be the unique name pedalboard uses
+                self.plugins[final_plugin_name_for_storage] = plugin_entry
+
+        except Exception as e:
+            logger.error(f"Error scanning plugin file {plugin_path_str} with loader {plugin_loader.__name__}: {e}")
+
+
+    def scan_typed_plugins(self, plugin_type: str, found_plugins: List[Path], plugin_loader: PedalboardPluginType) -> None:
+        """Scans a list of found plugin files of a specific type."""
+        if not found_plugins:
+            logger.info(f"No new/found plugins of type {plugin_type} to scan.")
+            return
+
+        logger.info(f"Scanning {len(found_plugins)} {plugin_type} plugin files...")
+        with tqdm(found_plugins, desc=f"Scanning {plugin_type}", unit="file") as pbar:
+            for plugin_path in pbar:
+                plugin_fn = plugin_path.stem
+                pbar.set_postfix_str(plugin_fn, refresh=True)
+                try:
+                    self.scan_single_plugin_file(
+                        plugin_type, plugin_path, plugin_loader
+                    )
+                except Exception as e: # Catch-all for safety during iteration
+                    logger.error(f"Unexpected error processing {plugin_path}: {e}")
+
+                if self.safe_save: # Save after each file (can be slow)
+                    self.save_plugins()
+        if not self.safe_save: # Save once at the end if not saving incrementally
+            self.save_plugins()
+
+
+    def scan_aufx_plugins(self, plugin_paths: Optional[List[Path]] = None) -> None:
+        """Scans Audio Unit (AUFX) plugins."""
+        logger.info("Scanning for AUFX plugins...")
+        found_aufx_plugins = self._find_aufx_plugins(plugin_paths=plugin_paths)
+        self.scan_typed_plugins(
+            "aufx",
+            found_aufx_plugins,
+            pedalboard.AudioUnitPlugin,
+        )
+
+    def scan_vst3_plugins(self, extra_folders: Optional[List[str]] = None, plugin_paths: Optional[List[Path]] = None) -> None:
+        """Scans VST3 plugins."""
+        logger.info("Scanning for VST3 plugins...")
+        found_vst3_plugins = self._find_vst3_plugins(extra_folders=extra_folders, plugin_paths=plugin_paths)
+        self.scan_typed_plugins(
+            "vst3",
+            found_vst3_plugins,
+            pedalboard.VST3Plugin,
+        )
+
+    def scan_all_plugins(self, extra_folders: Optional[List[str]] = None, plugin_paths: Optional[List[Path]] = None) -> None:
+        """Scans all supported plugin types."""
+        # If specific plugin_paths are given, we might only scan those.
+        # Current logic: if plugin_paths is provided, it's used by type-specific finders.
+        # extra_folders is only for VST3 if plugin_paths is None for VST3.
+
+        self.scan_vst3_plugins(extra_folders=extra_folders, plugin_paths=plugin_paths)
+        if platform.system() == "Darwin":
+            self.scan_aufx_plugins(plugin_paths=plugin_paths) # AU only on Darwin
+
+    def full_scan(self, extra_folders: Optional[List[str]] = None) -> None:
+        """Performs a full scan, clearing existing plugins."""
+        logger.info("Starting full plugin scan (clearing existing cache)...")
+        self.plugins = {} # Clear existing plugins before scan
+        # The original 'scan' called scan_plugins with extra_folders=None, which was a bug
+        # if extra_folders was meant to be passed down.
+        # Assuming 'scan_all_plugins' is the intended method for a general scan.
+        self.scan_all_plugins(extra_folders=extra_folders) # plugin_paths=None for discovery
+        self.save_plugins()
+        logger.info("Full plugin scan finished.")
+
+    def rescan(self, extra_folders: Optional[List[str]] = None) -> None: # Kept original name
+        """Alias for full_scan for backward compatibility or semantic preference."""
+        self.full_scan(extra_folders=extra_folders)
+
+    def update_scan(self, extra_folders: Optional[List[str]] = None) -> None:
+        """Scans for new plugins not already in the cache."""
+        logger.info("Starting update scan (looking for new plugins)...")
+        if not self.plugins_path.exists():
+            logger.info("No existing plugin cache found. Performing full scan instead.")
+            self.full_scan(extra_folders=extra_folders)
+            return
+
+        # Load existing plugins to compare against
+        # Type annotation for p ensures mypy knows p is a dict and has 'path' and 'type'
+        existing_plugins_data = load_json_file(self.plugins_path)
+        if not isinstance(existing_plugins_data, dict): # Should be a dict
+             logger.warning("Plugin cache is not a valid dictionary. Performing full scan.")
+             self.full_scan(extra_folders=extra_folders)
+             return
+
+        self.plugins = existing_plugins_data # Start with current cache
+
+        # Logic to find only new plugins
+        # VST3
+        all_found_vst3_paths: Set[Path] = {p.resolve() for p in self._find_vst3_plugins(extra_folders=extra_folders)}
+        cached_vst3_paths: Set[Path] = {Path(p_info["path"]).resolve() for p_info in self.plugins.values() if p_info.get("type") == "vst3" and "path" in p_info}
+        new_vst3_paths_to_scan: List[Path] = sorted(list(all_found_vst3_paths - cached_vst3_paths))
+        if new_vst3_paths_to_scan:
+            logger.info(f"Found {len(new_vst3_paths_to_scan)} new VST3 plugin files to scan.")
+            self.scan_vst3_plugins(plugin_paths=new_vst3_paths_to_scan) # Scan only these new paths
+        else:
+            logger.info("No new VST3 plugin files found.")
+
+        # AUFX (macOS only)
+        if platform.system() == "Darwin":
+            all_found_aufx_paths: Set[Path] = {p.resolve() for p in self._find_aufx_plugins()}
+            cached_aufx_paths: Set[Path] = {Path(p_info["path"]).resolve() for p_info in self.plugins.values() if p_info.get("type") == "aufx" and "path" in p_info}
+            new_aufx_paths_to_scan: List[Path] = sorted(list(all_found_aufx_paths - cached_aufx_paths))
+            if new_aufx_paths_to_scan:
+                logger.info(f"Found {len(new_aufx_paths_to_scan)} new AUFX plugin files to scan.")
+                self.scan_aufx_plugins(plugin_paths=new_aufx_paths_to_scan) # Scan only these
+            else:
+                logger.info("No new AUFX plugin files found.")
+
+        # self.save_plugins() is called within scan_typed_plugins if not safe_save,
+        # or after each file if safe_save. If scan_typed_plugins wasn't called (no new plugins),
+        # an explicit save here might be redundant but harmless if state hasn't changed.
+        # However, if safe_save is False, it's crucial here.
+        if not self.safe_save and (new_vst3_paths_to_scan or (platform.system() == "Darwin" and 'new_aufx_paths_to_scan' in locals() and new_aufx_paths_to_scan)):
+             self.save_plugins()
+        elif not new_vst3_paths_to_scan and not (platform.system() == "Darwin" and 'new_aufx_paths_to_scan' in locals() and new_aufx_paths_to_scan):
+             logger.info("No new plugins found in update scan. Cache remains unchanged.")
+
+
+        logger.info("Update scan finished.")
+
+    # Renamed original 'scan' to 'full_scan' and 'update' to 'update_scan' for clarity.
+    # Kept original names for CLI compatibility by aliasing them if needed in __main__.py
+    # For direct class usage, the new names are more descriptive.
+    # The original `scan` method in the class was equivalent to `full_scan`.
+    # The original `update` method in the class is `update_scan`.
+    # The CLI part in __main__.py used `rescan` (for full) and `update`.
+
+    def get_json(self) -> str:
+        """Returns a JSON string representation of the currently scanned/loaded plugins."""
+        return json.dumps(self.plugins, indent=4)
+</file>
+
+<file path="src/pedalboard_pluginary/utils.py">
+from pathlib import Path
+from typing import Any, Union
+
+def ensure_folder(path: Path) -> None:
+    """ Ensure that a folder exists. """
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+def from_pb_param(data: Any) -> Union[float, bool, str]:
+    """
+    Converts a pedalboard parameter value to a Python native type.
+    Pedalboard parameter values can be string representations of floats, booleans, or just strings.
+    """
+    drep = str(data)
+    try:
+        return float(drep)
+    except ValueError:
+        pass
+    if drep.lower() == "true":
+        return True
+    if drep.lower() == "false":
+        return False
+    return drep
+</file>
+
+<file path=".pre-commit-config.yaml">
+exclude: '^docs/conf.py'
+
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v4.5.0
+  hooks:
+  - id: trailing-whitespace
+  - id: check-added-large-files
+  - id: check-ast
+  - id: check-json
+  - id: check-merge-conflict
+  - id: check-xml
+  - id: check-yaml
+  - id: debug-statements
+  - id: end-of-file-fixer
+  - id: requirements-txt-fixer
+  - id: mixed-line-ending
+    args: ['--fix=auto']  # replace 'auto' with 'lf' to enforce Linux/Mac line endings or 'crlf' for Windows
+
+## If you want to automatically "modernize" your Python code:
+# - repo: https://github.com/asottile/pyupgrade
+#   rev: v3.7.0
+#   hooks:
+#   - id: pyupgrade
+#     args: ['--py37-plus']
+
+## If you want to avoid flake8 errors due to unused vars or imports:
+# - repo: https://github.com/PyCQA/autoflake
+#   rev: v2.1.1
+#   hooks:
+#   - id: autoflake
+#     args: [
+#       --in-place,
+#       --remove-all-unused-imports,
+#       --remove-unused-variables,
+#     ]
+
+- repo: https://github.com/PyCQA/isort
+  rev: 5.12.0
+  hooks:
+  - id: isort
+
+- repo: https://github.com/psf/black
+  rev: 23.11.0
+  hooks:
+  - id: black
+    language_version: python3
+
+## If like to embrace black styles even in the docs:
+# - repo: https://github.com/asottile/blacken-docs
+#   rev: v1.13.0
+#   hooks:
+#   - id: blacken-docs
+#     additional_dependencies: [black]
+
+- repo: https://github.com/PyCQA/flake8
+  rev: 6.1.0
+  hooks:
+  - id: flake8
+  ## You can add flake8 plugins via `additional_dependencies`:
+  #  additional_dependencies: [flake8-bugbear]
+
+- repo: https://github.com/pre-commit/mirrors-mypy
+  rev: v1.7.0 # Or choose the latest version
+  hooks:
+  - id: mypy
+    # You might need to specify `additional_dependencies` for mypy to find your project's dependencies
+    # e.g., additional_dependencies: [types-setuptools, types-requests]
+    # For this project:
+    additional_dependencies: [
+      types-setuptools, # For pkg_resources, etc.
+      # Add stubs for other dependencies if mypy complains and they exist
+      # types-fire, types-tqdm, types-python-benedict might not exist or be mature.
+      # For now, we'll rely on inline # type: ignore for problematic libs
+      # and the mypy config in pyproject.toml for global settings.
+      "pedalboard", # To make mypy aware of pedalboard, even if it has no stubs
+      "fire",
+      "tqdm",
+      "python-benedict"
+    ]
+    # It's good practice to also configure mypy via pyproject.toml or mypy.ini
+    # For example, to specify the Python version, follow imports, etc.
+    args: [--config-file=pyproject.toml] # Point to pyproject.toml for config
+
+## Check for misspells in documentation files:
+# - repo: https://github.com/codespell-project/codespell
+#   rev: v2.2.5
+#   hooks:
+#   - id: codespell
+</file>
+
+<file path="pyproject.toml">
+[build-system]
+requires = ["setuptools>=46.1.0", "setuptools_scm[toml]>=5"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+version_scheme = "no-guess-dev"
+
+[project]
+name = "pedalboard_pluginary"
+description = "VST & AU plugin management for Spotify Pedalboard"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" } # Or file = "LICENSE.txt" if preferred by newer setuptools
+authors = [
+    { name = "Adam Twardoch", email = "adam+github@twardoch.com" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "pedalboard>=0.8.6",
+    "fire>=0.5.0",
+    "tqdm>=4.66.1",
+    "python_benedict>=0.33.0",
+]
+
+[project.urls]
+Documentation = "https://github.com/twardoch/pedalboard-pluginary#readme"
+Source = "https://github.com/twardoch/pedalboard-pluginary"
+Tracker = "https://github.com/twardoch/pedalboard-pluginary/issues"
+
+[project.optional-dependencies]
+testing = [
+    "pytest",
+    "pytest-cov",
+    "mypy>=1.0", # Added mypy
+]
+
+[project.scripts]
+pbpluginary = "pedalboard_pluginary.__main__:cli"
+
+[tool.setuptools]
+zip_safe = false
+include_package_data = true
+package_dir = {"" = "src"}
+# `find` directive for packages is often implicit with src layout, or can be more specific
+# For example, packages = ["pedalboard_pluginary"] if not using find:
+packages = {find = {where = ["src"], exclude = ["tests*"]}}
+
+
+[tool.setuptools.package-data]
+"pedalboard_pluginary" = ["resources/*.json"]
+
+[tool.pytest.ini_options]
+addopts = "--cov pedalboard_pluginary --cov-report term-missing --verbose"
+norecursedirs = ["dist", "build", ".tox"]
+testpaths = ["tests"]
+
+[tool.flake8]
+max_line_length = 88
+extend_ignore = "E203,W503"
+exclude = [
+    ".tox",
+    "build",
+    "dist",
+    ".eggs",
+    "docs/conf.py",
+]
+
+[tool.mypy]
+python_version = "3.9"
+mypy_path = "src"
+ignore_missing_imports = true # For libraries without stubs like pedalboard, fire, tqdm, benedict
+# More specific ignores can be added:
+# [[tool.mypy.overrides]]
+# module = [
+#    "pedalboard",
+#    "fire",
+#    "tqdm",
+#    "benedict",
+#    "pkg_resources" # if types-setuptools is not sufficient or causes issues
+# ]
+# ignore_missing_imports = true
+
+# Show error codes so they can be suppressed if necessary.
+show_error_codes = true
+# Strict optional checking, etc., can be enabled for more thoroughness.
+# strict_optional = true
+# warn_return_any = true
+# warn_unused_ignores = true
+# disallow_untyped_defs = true # Enforce type hints on all functions
+# disallow_incomplete_defs = true # Enforce full type hints
+</file>
+
+</files>
