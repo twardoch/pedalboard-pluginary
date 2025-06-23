@@ -1,5 +1,9 @@
 # Pedalboard Pluginary
 
+[![Codecov](https://codecov.io/gh/twardoch/pedalboard-pluginary/branch/main/graph/badge.svg?token=YOUR_CODECOV_TOKEN_HERE)](https://codecov.io/gh/twardoch/pedalboard-pluginary)
+<!-- Replace YOUR_CODECOV_TOKEN_HERE with the actual token from Codecov if needed, or remove the token part if your repo is public and Codecov supports tokenless uploads for it.
+The URL should also be verified once the repo is active on Codecov. -->
+
 _Pedalboard Pluginary_ is an independent Python-based package and command-line tool that scans and lists VST-3 plugins on macOS and Windows, and Audio Unit (AU) plugins on macOS. It’s intended as a companion for the _[Pedalboard](https://github.com/spotify/pedalboard)_ Python library by Spotify, but it’s not affiliated with _Pedalboard_ or Spotify.
 
 ## Features
