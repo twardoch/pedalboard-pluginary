@@ -2,43 +2,42 @@
 Handles scanning of VST3 plugins.
 """
 
-import itertools
 import logging
 import os
 import platform
-import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 import pedalboard  # type: ignore[import-untyped]
 
+from ..base_scanner import BaseScanner
 from ..models import PluginInfo, PluginParameter
 from ..utils import from_pb_param
 
 logger = logging.getLogger(__name__)
 
 
-class VST3Scanner:
-    """Scans VST3 plugins."""
-
-    def __init__(
-        self,
-        ignore_paths: Optional[List[str]] = None,
-        specific_paths: Optional[List[str]] = None,
-    ):
-        """Initialize the VST3 scanner with optional ignore paths and specific paths."""
-        self.ignore_paths = ignore_paths or []
-        self.specific_paths = specific_paths or []
-
+class VST3Scanner(BaseScanner):
+    """Scanner for VST3 plugins."""
+    
+    @property
+    def plugin_type(self) -> str:
+        """Return the plugin type this scanner handles."""
+        return "vst3"
+    
+    @property
+    def supported_extensions(self) -> List[str]:
+        """Return list of file extensions this scanner supports."""
+        return [".vst3"]
+    
     def _get_default_vst3_folders(self) -> List[Path]:
-        """Gets standard VST3 plugin folders for the current OS."""
-        os_name: str = platform.system()
+        """Get standard VST3 plugin folders for the current OS."""
+        os_name = platform.system()
         folders: List[Path] = []
-
-        program_files = os.getenv("ProgramFiles", "C:\\Program Files")
-        program_files_x86 = os.getenv("ProgramFiles(x86)", "C:\\Program Files (x86)")
-
+        
         if os_name == "Windows":
+            program_files = os.getenv("ProgramFiles", "C:\\Program Files")
+            program_files_x86 = os.getenv("ProgramFiles(x86)", "C:\\Program Files (x86)")
             folders = [
                 Path(program_files) / "Common Files" / "VST3",
                 Path(program_files_x86) / "Common Files" / "VST3",
@@ -49,58 +48,71 @@ class VST3Scanner:
                 Path("/Library/Audio/Plug-Ins/VST3"),
             ]
         elif os_name == "Linux":
-            # Standard VST3 paths on Linux
-            # See: https://steinbergmedia.github.io/vst3_dev_portal/pages/Technical+Documentation/Locations+Format/Plugin+Locations.html
             folders = [
-                Path("~/.vst3").expanduser(),  # User specific
-                Path("/usr/lib/vst3"),  # System wide
-                Path("/usr/local/lib/vst3"),  # Locally installed system wide
+                Path("~/.vst3").expanduser(),
+                Path("/usr/lib/vst3"),
+                Path("/usr/local/lib/vst3"),
             ]
-
+        
         return [f for f in folders if f.exists()]
-
-    def find_plugin_files(
-        self,
-        extra_folders: Optional[List[str]] = None,
-        plugin_paths: Optional[List[Path]] = None,
-    ) -> List[Path]:
-        """Find all VST3 plugin files in standard and custom folders."""
-        plugin_type = "vst3"
-
-        all_folders_to_search: List[Path] = self._get_default_vst3_folders()
+    
+    def find_plugin_files(self, paths: Optional[List[Path]] = None) -> List[Path]:
+        """Find all VST3 plugin files in standard and custom folders.
         
-        if extra_folders:
-            all_folders_to_search.extend([Path(folder) for folder in extra_folders])
-        
-        if plugin_paths:
+        Args:
+            paths: Optional list of specific paths to check.
+            
+        Returns:
+            List of paths to VST3 plugin files found.
+        """
+        if paths:
             # Filter specific paths to only VST3 files
-            return [p for p in plugin_paths if p.suffix == ".vst3" and p.exists()]
-
-        if not all_folders_to_search:
+            vst3_paths = [p for p in paths if p.suffix in self.supported_extensions]
+            return self._filter_plugin_paths(vst3_paths)
+        
+        # Search default VST3 folders
+        search_folders = self._get_default_vst3_folders()
+        
+        if not search_folders:
             logger.warning("No VST3 folders to search.")
             return []
-
-        logger.info(f"Searching for VST3 plugins in: {all_folders_to_search}")
-
-        # Using set to avoid adding same path multiple times if folders overlap or symlinked
-        discovered_plugin_path_set = set()
-        for folder in all_folders_to_search:
-            for item in folder.glob(f"*.{plugin_type}"):
-                if item.is_file() and self._should_include_path(item):
-                    discovered_plugin_path_set.add(item.resolve())
-
-        vst3_plugin_files = sorted(list(discovered_plugin_path_set))
-        logger.info(f"Found {len(vst3_plugin_files)} VST3 plugin files to consider.")
-        return vst3_plugin_files
-
-    def scan_plugin(self, plugin_path: Path) -> Optional[PluginInfo]:
-        """Scan a VST3 plugin and return its information."""
-        if not plugin_path.exists() or plugin_path.suffix != ".vst3":
+        
+        logger.info(f"Searching for VST3 plugins in: {search_folders}")
+        
+        # Find all VST3 files
+        discovered_plugins = set()
+        for folder in search_folders:
+            try:
+                for vst3_file in folder.glob("*.vst3"):
+                    if vst3_file.is_file():
+                        discovered_plugins.add(vst3_file.resolve())
+            except Exception as e:
+                logger.error(f"Error searching folder {folder}: {e}")
+        
+        # Apply filtering
+        plugin_list = sorted(list(discovered_plugins))
+        filtered_list = self._filter_plugin_paths(plugin_list)
+        
+        logger.info(f"Found {len(filtered_list)} VST3 plugins after filtering.")
+        return filtered_list
+    
+    def scan_plugin(self, path: Path) -> Optional[PluginInfo]:
+        """Scan a VST3 plugin and return its information.
+        
+        Args:
+            path: Path to the VST3 plugin file.
+            
+        Returns:
+            PluginInfo object if successful, None if scanning failed.
+        """
+        if not self.validate_plugin_path(path):
+            logger.warning(f"Invalid plugin path: {path}")
             return None
-
+        
         try:
             # Load the plugin to get its parameters
-            plugin = pedalboard.load_plugin(str(plugin_path))  # type: ignore[attr-defined]
+            logger.debug(f"Loading VST3 plugin: {path}")
+            plugin = pedalboard.load_plugin(str(path))  # type: ignore[attr-defined]
             
             # Extract parameters
             params: Dict[str, PluginParameter] = {}
@@ -119,25 +131,23 @@ class VST3Scanner:
                 manufacturer = str(plugin.manufacturer)
             
             # Get the plugin's display name if available
-            display_name = plugin_path.stem
+            display_name = path.stem
             if hasattr(plugin, 'name'):
                 display_name = str(plugin.name)
             
-            return PluginInfo(
-                id=f"vst3/{plugin_path.stem}",
+            plugin_info = PluginInfo(
+                id=self._create_plugin_id(path),
                 name=display_name,
-                path=str(plugin_path),
-                filename=plugin_path.name,
-                plugin_type="vst3",
+                path=str(path),
+                filename=path.name,
+                plugin_type=self.plugin_type,
                 parameters=params,
                 manufacturer=manufacturer,
             )
+            
+            logger.info(f"Successfully scanned VST3 plugin: {display_name}")
+            return plugin_info
+            
         except Exception as e:
-            logger.error(f"Error scanning VST3 plugin {plugin_path}: {e}")
+            logger.error(f"Error scanning VST3 plugin {path}: {e}")
             return None
-
-    def _should_include_path(self, plugin_path: Path) -> bool:
-        """Determine if a plugin path should be included based on ignore and specific paths."""
-        return not any(
-            re.match(pattern, str(plugin_path)) for pattern in self.ignore_paths
-        ) and (not self.specific_paths or plugin_path in self.specific_paths)

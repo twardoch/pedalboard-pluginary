@@ -3,18 +3,18 @@
 ## Phase 1: Foundation and Type Safety (Immediate)
 
 ### Scanner Protocol and Base Classes
-- [ ] Create protocols.py with PluginScanner Protocol definition
-- [ ] Implement BaseScanner class with common functionality
-- [ ] Refactor VST3Scanner to inherit from BaseScanner
-- [ ] Refactor AUScanner to inherit from BaseScanner
-- [ ] Add validate_plugin_path method to all scanners
+- [x] Create protocols.py with PluginScanner Protocol definition
+- [x] Implement BaseScanner class with common functionality
+- [x] Refactor VST3Scanner to inherit from BaseScanner
+- [x] Refactor AUScanner to inherit from BaseScanner
+- [x] Add validate_plugin_path method to all scanners
 
 ### Type Safety Improvements
-- [ ] Create types.py with type aliases and TypedDict definitions
+- [x] Create types.py with type aliases and TypedDict definitions
 - [ ] Add type stubs for pedalboard library
 - [ ] Replace all Dict[str, Any] with proper types
 - [ ] Remove all # type: ignore comments with proper solutions
-- [ ] Implement type guards for runtime validation
+- [x] Implement type guards for runtime validation
 
 ### Unified Serialization
 - [ ] Create serialization.py module

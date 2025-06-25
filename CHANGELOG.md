@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rewrote AUScanner to properly load plugins with fallback to auval
 - Added proper plugin metadata extraction (manufacturer, display name)
 - Improved plugin path discovery for both VST3 and AU formats
+- Created scanner abstraction layer with BaseScanner class
+- Added Protocol definitions for scanner interfaces
+- Implemented type safety improvements with types.py
+- Refactored scanners to use common base class functionality
 
 ## [1.1.0] - Previous Release
 
