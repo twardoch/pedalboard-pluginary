@@ -1,10 +1,16 @@
+import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union, cast
+
+from .scanners.au_scanner import AUScanner
+from .scanners.vst3_scanner import VST3Scanner
+from .async_scanner import AsyncScannerMixin
 
 import pedalboard
 
+from .constants import DEFAULT_MAX_CONCURRENT
 from .data import (
     copy_default_ignores,
     get_cache_path,
@@ -15,8 +21,6 @@ from .exceptions import CacheCorruptedError, PluginScanError
 from .models import PluginInfo, PluginParameter
 from .progress import TqdmProgress
 from .protocols import ProgressReporter
-from .scanners.au_scanner import AUScanner
-from .scanners.vst3_scanner import VST3Scanner
 from .serialization import PluginSerializer
 from .utils import ensure_folder, from_pb_param
 
@@ -31,6 +35,8 @@ class PedalboardScanner:
         ignore_paths: Optional[List[str]] = None,
         specific_paths: Optional[List[str]] = None,
         progress_reporter: Optional[ProgressReporter] = None,
+        async_mode: bool = False,
+        max_concurrent: int = DEFAULT_MAX_CONCURRENT,
     ):
         """Initialize the scanner with optional ignore paths and specific paths.
         
@@ -38,6 +44,8 @@ class PedalboardScanner:
             ignore_paths: List of regex patterns for paths to ignore.
             specific_paths: List of specific paths to scan.
             progress_reporter: Optional progress reporter instance.
+            async_mode: Whether to use async scanning for better performance.
+            max_concurrent: Maximum number of concurrent scans (async mode only).
         """
         self.ignore_paths = ignore_paths or []
         self.specific_paths = specific_paths or []
@@ -45,6 +53,8 @@ class PedalboardScanner:
         self.plugins_path = get_cache_path("plugins")
         self.ignores_path = get_cache_path("ignores")
         self.progress_reporter = progress_reporter or TqdmProgress()
+        self.async_mode = async_mode
+        self.max_concurrent = max_concurrent
         
         # Initialize ignores
         copy_default_ignores(self.ignores_path)
@@ -175,6 +185,97 @@ class PedalboardScanner:
             self.save_data()
         
         return new_plugins
+
+    async def full_scan_async(self) -> Dict[str, PluginInfo]:
+        """Perform a full async scan of all plugin types."""
+        if not self.async_mode:
+            raise ValueError("Async mode not enabled. Set async_mode=True during initialization.")
+        
+        self.plugins = {}
+        
+        # Collect all plugin files from all scanners
+        all_plugin_files = []
+        for scanner in self.scanners:
+            plugin_files = scanner.find_plugin_files()
+            all_plugin_files.extend(plugin_files)
+        
+        # Filter out ignored plugins
+        files_to_scan = []
+        for plugin_file in all_plugin_files:
+            # Find the appropriate scanner for this file
+            found_scanner = self._find_scanner_for_file(plugin_file)
+            if found_scanner:
+                plugin_key = f"{found_scanner.__class__.__name__.replace('Scanner', '').lower()}:{plugin_file}"
+                if plugin_key not in self.ignores:
+                    files_to_scan.append(plugin_file)
+        
+        # Scan plugins asynchronously
+        if files_to_scan:
+            # Use the first scanner that supports async (they all do now)
+            async_scanner = cast(AsyncScannerMixin, self.scanners[0])  # VST3Scanner and AUScanner both have AsyncScannerMixin
+            
+            scanned_plugins = []
+            async for plugin in async_scanner.scan_plugins_batch(
+                files_to_scan, 
+                max_concurrent=self.max_concurrent,
+                progress_reporter=self.progress_reporter
+            ):
+                scanned_plugins.append(plugin)
+                self.plugins[plugin.id] = plugin
+        
+        # Save the results
+        self.save_data()
+        return self.plugins
+    
+    async def update_scan_async(self) -> Dict[str, PluginInfo]:
+        """Update the scan asynchronously with new plugins while preserving existing data."""
+        if not self.async_mode:
+            raise ValueError("Async mode not enabled. Set async_mode=True during initialization.")
+        
+        # Keep track of existing plugins
+        existing_plugins = set(self.plugins.keys())
+        new_plugins = {}
+        
+        # Find all plugin files
+        all_plugin_files = []
+        for scanner in self.scanners:
+            plugin_files = scanner.find_plugin_files()
+            all_plugin_files.extend(plugin_files)
+        
+        # Only scan plugins that aren't already in the cache
+        files_to_scan = []
+        for plugin_file in all_plugin_files:
+            found_scanner = self._find_scanner_for_file(plugin_file)
+            if found_scanner:
+                plugin_type = found_scanner.__class__.__name__.replace('Scanner', '').lower()
+                plugin_key = f"{plugin_type}:{plugin_file}"
+                
+                if plugin_key not in existing_plugins and plugin_key not in self.ignores:
+                    files_to_scan.append(plugin_file)
+        
+        # Scan new plugins asynchronously
+        if files_to_scan:
+            async_scanner = cast(AsyncScannerMixin, self.scanners[0])
+            
+            async for plugin in async_scanner.scan_plugins_batch(
+                files_to_scan,
+                max_concurrent=self.max_concurrent,
+                progress_reporter=self.progress_reporter
+            ):
+                self.plugins[plugin.id] = plugin
+                new_plugins[plugin.id] = plugin
+            
+            # Save updated data
+            self.save_data()
+        
+        return new_plugins
+    
+    def _find_scanner_for_file(self, plugin_file: Path) -> Optional[Union[AUScanner, VST3Scanner]]:
+        """Find the appropriate scanner for a given plugin file."""
+        for scanner in self.scanners:
+            if scanner.validate_plugin_path(plugin_file):
+                return scanner  # type: ignore[return-value]
+        return None
 
     def get_json(self) -> str:
         """Return the plugins data as a JSON string."""

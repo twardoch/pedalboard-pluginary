@@ -70,6 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed remaining type safety issues in base_scanner.py and __main__.py
 - Achieved 100% mypy compliance in strict mode with zero errors
 - Completed Phase 1: Critical Fixes and Type Safety implementation
+- Implemented AsyncScannerMixin for concurrent plugin loading
+- Added async support to VST3Scanner and AUScanner classes
+- Created async scanning methods in PedalboardScanner (full_scan_async, update_scan_async)
+- Added configurable concurrency limits for async operations
+- Maintained zero mypy errors while adding async functionality
 
 ## [1.1.0] - Previous Release
 

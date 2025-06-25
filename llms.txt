@@ -53,6 +53,7 @@ src/
       vst3_scanner.py
     __init__.py
     __main__.py
+    async_scanner.py
     base_scanner.py
     constants.py
     core.py
@@ -95,176 +96,6 @@ tox.ini
 <files>
 This section contains the contents of the repository's files.
 
-<file path="src/pedalboard_pluginary/timeout.py">
-"""
-Timeout handling for plugin operations.
-"""
-
-import asyncio
-import concurrent.futures
-import functools
-import logging
-from typing import Any, Awaitable, Callable, TypeVar, Union
-
-from .constants import PLUGIN_LOAD_TIMEOUT
-
-logger = logging.getLogger(__name__)
-
-T = TypeVar('T')
-F = TypeVar('F', bound=Callable[..., Any])
-
-
-class TimeoutError(Exception):
-    """Raised when an operation times out."""
-    
-    def __init__(self, message: str, timeout: float):
-        super().__init__(message)
-        self.timeout = timeout
-
-
-def sync_timeout(func: Callable[..., T], timeout: float, *args: Any, **kwargs: Any) -> T:
-    """Execute synchronous function with timeout using ThreadPoolExecutor.
-    
-    Args:
-        func: Function to execute.
-        timeout: Timeout in seconds.
-        *args: Positional arguments for the function.
-        **kwargs: Keyword arguments for the function.
-        
-    Returns:
-        Function result.
-        
-    Raises:
-        TimeoutError: If function execution exceeds timeout.
-        Exception: Any exception raised by the function.
-    """
-    logger.debug(f"Executing {func.__name__} with {timeout}s timeout")
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(func, *args, **kwargs)
-        try:
-            result = future.result(timeout=timeout)
-            logger.debug(f"{func.__name__} completed successfully")
-            return result
-        except concurrent.futures.TimeoutError:
-            logger.warning(f"{func.__name__} timed out after {timeout}s")
-            # Cancel the future to prevent resource leaks
-            future.cancel()
-            raise TimeoutError(f"{func.__name__} timed out after {timeout}s", timeout)
-        except Exception as e:
-            logger.error(f"{func.__name__} failed: {e}")
-            raise
-
-
-async def async_timeout(coro_func: Callable[..., Awaitable[T]], timeout: float, *args: Any, **kwargs: Any) -> T:
-    """Execute coroutine function with timeout.
-    
-    Args:
-        coro_func: Coroutine function to execute.
-        timeout: Timeout in seconds.
-        *args: Positional arguments for the function.
-        **kwargs: Keyword arguments for the function.
-        
-    Returns:
-        Function result.
-        
-    Raises:
-        TimeoutError: If function execution exceeds timeout.
-        Exception: Any exception raised by the function.
-    """
-    logger.debug(f"Executing {coro_func.__name__} with {timeout}s timeout")
-    
-    try:
-        result: T = await asyncio.wait_for(coro_func(*args, **kwargs), timeout=timeout)
-        logger.debug(f"{coro_func.__name__} completed successfully")
-        return result
-    except asyncio.TimeoutError:
-        logger.warning(f"{coro_func.__name__} timed out after {timeout}s")
-        raise TimeoutError(f"{coro_func.__name__} timed out after {timeout}s", timeout)
-    except Exception as e:
-        logger.error(f"{coro_func.__name__} failed: {e}")
-        raise
-
-
-def with_sync_timeout(timeout: float = PLUGIN_LOAD_TIMEOUT) -> Callable[[F], F]:
-    """Decorator that adds timeout to synchronous functions.
-    
-    Args:
-        timeout: Timeout in seconds.
-        
-    Returns:
-        Decorated function.
-    """
-    def decorator(func: F) -> F:
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            return sync_timeout(func, timeout, *args, **kwargs)
-        return wrapper  # type: ignore[return-value]
-    return decorator
-
-
-def with_async_timeout(timeout: float = PLUGIN_LOAD_TIMEOUT) -> Callable[[F], F]:
-    """Decorator that adds timeout to async functions.
-    
-    Args:
-        timeout: Timeout in seconds.
-        
-    Returns:
-        Decorated function.
-    """
-    def decorator(func: F) -> F:
-        @functools.wraps(func)
-        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            return await async_timeout(func, timeout, *args, **kwargs)
-        return async_wrapper  # type: ignore[return-value]
-    return decorator
-</file>
-
-<file path="src/pedalboard-stubs/__init__.pyi">
-"""Type stubs for pedalboard library."""
-
-from typing import Dict, Union, Any, Optional, TypeVar
-from pathlib import Path
-
-# Parameter value types that pedalboard can return
-ParameterValue = Union[float, int, bool, str]
-
-class Plugin:
-    """Base plugin class."""
-    
-    # Core attributes that all plugins have
-    parameters: Dict[str, ParameterValue]
-    name: str
-    manufacturer: Optional[str]
-    
-    def __init__(self, *args: Any, **kwargs: Any) -> None: ...
-
-class AudioUnitPlugin(Plugin):
-    """Audio Unit plugin class."""
-    pass
-
-class VST3Plugin(Plugin):
-    """VST3 plugin class."""
-    pass
-
-# Plugin loading function
-def load_plugin(
-    path_or_name: Union[str, Path], 
-    plugin_name: Optional[str] = None,
-    disable_caching: bool = False,
-    **kwargs: Any
-) -> Plugin: ...
-
-# Re-export common types
-__all__ = [
-    "Plugin",
-    "AudioUnitPlugin", 
-    "VST3Plugin",
-    "load_plugin",
-    "ParameterValue",
-]
-</file>
-
 <file path="src/pedalboard_pluginary/resources/default_ignores.json">
 [
     "aufx/ANIMATE",
@@ -305,200 +136,156 @@ __all__ = [
 # For now, it will be kept empty.
 </file>
 
-<file path="src/pedalboard_pluginary/base_scanner.py">
+<file path="src/pedalboard_pluginary/async_scanner.py">
 """
-Base scanner class implementing common functionality for all plugin scanners.
+Async scanner implementation for concurrent plugin scanning.
 """
 
+import asyncio
 import logging
-import re
-from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Optional
+from typing import AsyncIterator, List, Optional, TYPE_CHECKING
 
+from .constants import PLUGIN_LOAD_TIMEOUT
 from .models import PluginInfo
-from .protocols import PluginScanner
+from .protocols import ProgressReporter
+from .timeout import TimeoutError
+
+if TYPE_CHECKING:
+    from .protocols import PluginScanner
 
 logger = logging.getLogger(__name__)
 
 
-class BaseScanner(ABC):
-    """Base class for plugin scanner implementations."""
+class AsyncScannerMixin:
+    """Mixin to add async capabilities to scanners.
     
-    def __init__(
-        self,
-        ignore_paths: Optional[List[str]] = None,
-        specific_paths: Optional[List[str]] = None,
-    ):
-        """Initialize the scanner with optional ignore paths and specific paths.
+    This mixin expects to be mixed with a class that implements the PluginScanner protocol.
+    """
+    
+    async def scan_plugin_async(self, path: Path) -> Optional[PluginInfo]:
+        """Async wrapper for plugin scanning with timeout.
         
         Args:
-            ignore_paths: List of regex patterns for paths to ignore.
-            specific_paths: List of specific paths to scan (if provided, only these are scanned).
-        """
-        self.ignore_paths = ignore_paths or []
-        self.specific_paths = specific_paths or []
-        self._compiled_ignore_patterns = [re.compile(pattern) for pattern in self.ignore_paths]
-    
-    @property
-    @abstractmethod
-    def plugin_type(self) -> str:
-        """Return the plugin type this scanner handles (e.g., 'vst3', 'aufx')."""
-        ...
-    
-    @property
-    @abstractmethod
-    def supported_extensions(self) -> List[str]:
-        """Return list of file extensions this scanner supports."""
-        ...
-    
-    @abstractmethod
-    def find_plugin_files(self, paths: Optional[List[Path]] = None) -> List[Path]:
-        """Find all plugin files of this scanner's type.
-        
-        Args:
-            paths: Optional list of specific paths to check.
-            
-        Returns:
-            List of paths to plugin files found.
-        """
-        ...
-    
-    @abstractmethod
-    def scan_plugin(self, path: Path) -> Optional[PluginInfo]:
-        """Scan a single plugin file and return its information.
-        
-        Args:
-            path: Path to the plugin file to scan.
+            path: Path to the plugin file.
             
         Returns:
             PluginInfo object if successful, None if scanning failed.
         """
-        ...
+        try:
+            # Use asyncio.to_thread for CPU-bound plugin loading
+            loop = asyncio.get_event_loop()
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, self.scan_plugin, path),  # type: ignore[attr-defined]
+                timeout=PLUGIN_LOAD_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Plugin {path} timed out during async scan")
+            return None
+        except Exception as e:
+            logger.error(f"Error in async plugin scan for {path}: {e}")
+            return None
     
-    def validate_plugin_path(self, path: Path) -> bool:
-        """Validate if a path is a valid plugin for this scanner.
+    async def scan_plugins_batch(
+        self, 
+        paths: List[Path], 
+        max_concurrent: int = 10,
+        progress_reporter: Optional[ProgressReporter] = None
+    ) -> AsyncIterator[PluginInfo]:
+        """Scan multiple plugins concurrently with backpressure control.
         
         Args:
-            path: Path to validate.
+            paths: List of plugin paths to scan.
+            max_concurrent: Maximum number of concurrent scans.
+            progress_reporter: Optional progress reporter.
             
-        Returns:
-            True if the path is a valid plugin file, False otherwise.
+        Yields:
+            PluginInfo objects for successfully scanned plugins.
         """
-        if not path.exists():
-            return False
+        if not paths:
+            return
         
-        # Check extension
-        if path.suffix not in self.supported_extensions:
-            return False
+        semaphore = asyncio.Semaphore(max_concurrent)
         
-        # Check against ignore patterns
-        if self._should_ignore_path(path):
-            return False
+        async def scan_with_semaphore(path: Path) -> Optional[PluginInfo]:
+            async with semaphore:
+                return await self.scan_plugin_async(path)
         
-        # Check if specific paths are set and this path is in them
-        if self.specific_paths and str(path) not in self.specific_paths:
-            return False
+        # Create tasks for all paths
+        tasks = [scan_with_semaphore(path) for path in paths]
         
-        return True
+        # Start progress tracking
+        if progress_reporter:
+            progress_reporter.start(len(tasks), f"Scanning {len(tasks)} plugins")
+        
+        completed = 0
+        successful = 0
+        
+        # Process tasks as they complete
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            completed += 1
+            
+            if result:
+                successful += 1
+                yield result
+            
+            # Update progress
+            if progress_reporter:
+                message = f"Completed {completed}/{len(tasks)} ({successful} successful)"
+                progress_reporter.update(1, message)
+        
+        # Finish progress tracking
+        if progress_reporter:
+            progress_reporter.finish(f"Scan completed: {successful}/{len(tasks)} plugins")
     
-    def _should_ignore_path(self, path: Path) -> bool:
-        """Check if a path should be ignored based on ignore patterns.
+    async def scan_directory_async(
+        self, 
+        directory: Path,
+        max_concurrent: int = 10,
+        progress_reporter: Optional[ProgressReporter] = None
+    ) -> List[PluginInfo]:
+        """Async scan of an entire directory.
         
         Args:
-            path: Path to check.
+            directory: Directory to scan for plugins.
+            max_concurrent: Maximum number of concurrent scans.
+            progress_reporter: Optional progress reporter.
             
         Returns:
-            True if the path should be ignored, False otherwise.
+            List of successfully scanned plugins.
         """
-        path_str = str(path)
-        for pattern in self._compiled_ignore_patterns:
-            if pattern.search(path_str):
-                logger.debug(f"Ignoring path {path} due to pattern {pattern.pattern}")
-                return True
-        return False
+        # Find plugin files
+        plugin_files = self.find_plugin_files([directory])  # type: ignore[attr-defined]
+        
+        # Scan plugins concurrently
+        plugins = []
+        async for plugin in self.scan_plugins_batch(
+            plugin_files, 
+            max_concurrent=max_concurrent,
+            progress_reporter=progress_reporter
+        ):
+            plugins.append(plugin)
+        
+        return plugins
+
+
+class AsyncVST3Scanner(AsyncScannerMixin):
+    """VST3 scanner with async capabilities.
     
-    def _filter_plugin_paths(self, paths: List[Path]) -> List[Path]:
-        """Filter plugin paths based on validation criteria.
-        
-        Args:
-            paths: List of paths to filter.
-            
-        Returns:
-            Filtered list of valid plugin paths.
-        """
-        valid_paths = []
-        for path in paths:
-            if self.validate_plugin_path(path):
-                valid_paths.append(path)
-            else:
-                logger.debug(f"Filtered out invalid plugin path: {path}")
-        
-        return valid_paths
+    This is a placeholder for the async VST3 scanner that will inherit
+    from both VST3Scanner and AsyncScannerMixin.
+    """
+    pass
+
+
+class AsyncAUScanner(AsyncScannerMixin):
+    """AU scanner with async capabilities.
     
-    def _create_plugin_id(self, path: Path) -> str:
-        """Create a unique plugin ID from its path.
-        
-        Args:
-            path: Path to the plugin.
-            
-        Returns:
-            Unique plugin ID string.
-        """
-        return f"{self.plugin_type}/{path.stem}"
-</file>
-
-<file path="src/pedalboard_pluginary/constants.py">
-"""
-Constants and configuration values for pedalboard_pluginary.
-"""
-
-from typing import Final
-
-# Application metadata
-APP_NAME: Final[str] = "com.twardoch.pedalboard-pluginary"
-APP_VERSION: Final[str] = "0.1.0"  # TODO: Get from package metadata
-
-# Cache configuration
-CACHE_VERSION: Final[str] = "2.0.0"
-PLUGINS_CACHE_FILENAME: Final[str] = "plugins"
-IGNORES_CACHE_FILENAME: Final[str] = "ignores"
-
-# Scanner configuration
-DEFAULT_SCAN_TIMEOUT: Final[int] = 10  # seconds
-PLUGIN_LOAD_TIMEOUT: Final[float] = 10.0  # seconds for individual plugin loading
-MAX_SCAN_RETRIES: Final[int] = 3
-SCAN_RETRY_DELAY: Final[float] = 1.0  # seconds
-
-# Plugin types
-PLUGIN_TYPE_VST3: Final[str] = "vst3"
-PLUGIN_TYPE_AU: Final[str] = "aufx"
-SUPPORTED_PLUGIN_TYPES: Final[list[str]] = [PLUGIN_TYPE_VST3, PLUGIN_TYPE_AU]
-
-# File extensions
-VST3_EXTENSION: Final[str] = ".vst3"
-AU_EXTENSION: Final[str] = ".component"
-
-# Platform names
-PLATFORM_WINDOWS: Final[str] = "Windows"
-PLATFORM_MACOS: Final[str] = "Darwin"
-PLATFORM_LINUX: Final[str] = "Linux"
-
-# Progress reporting
-DEFAULT_PROGRESS_BAR_WIDTH: Final[int] = 80
-PROGRESS_UPDATE_INTERVAL: Final[float] = 0.1  # seconds
-
-# Logging configuration
-LOG_FORMAT: Final[str] = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-LOG_DATE_FORMAT: Final[str] = "%Y-%m-%d %H:%M:%S"
-
-# CLI configuration
-DEFAULT_OUTPUT_FORMAT: Final[str] = "json"
-SUPPORTED_OUTPUT_FORMATS: Final[list[str]] = ["json", "yaml", "table", "csv"]
-
-# Resource paths
-RESOURCES_PACKAGE: Final[str] = "pedalboard_pluginary.resources"
-DEFAULT_IGNORES_FILENAME: Final[str] = "default_ignores.json"
+    This is a placeholder for the async AU scanner that will inherit
+    from both AUScanner and AsyncScannerMixin.
+    """
+    pass
 </file>
 
 <file path="src/pedalboard_pluginary/exceptions.py">
@@ -663,214 +450,6 @@ class PlatformError(PluginaryError):
         self.operation = operation
         self.platform = platform
         self.supported_platforms = supported_platforms or []
-</file>
-
-<file path="src/pedalboard_pluginary/progress.py">
-"""
-Progress reporting implementations.
-"""
-
-import logging
-from typing import Any, Callable, Optional
-
-from tqdm import tqdm
-
-from .protocols import ProgressReporter
-
-logger = logging.getLogger(__name__)
-
-
-class TqdmProgress(ProgressReporter):
-    """Progress reporter using tqdm progress bars."""
-    
-    def __init__(self) -> None:
-        """Initialize the progress reporter."""
-        self._pbar: Optional[tqdm[Any]] = None
-        self._total: int = 0
-        self._current: int = 0
-        self._description: str = ""
-    
-    def start(self, total: int, description: str = "") -> None:
-        """Start progress tracking.
-        
-        Args:
-            total: Total number of items to process.
-            description: Optional description of the operation.
-        """
-        self._total = total
-        self._current = 0
-        self._description = description
-        self._pbar = tqdm(total=total, desc=description)
-    
-    def update(self, amount: int = 1, message: Optional[str] = None) -> None:
-        """Update progress.
-        
-        Args:
-            amount: Number of items completed (default: 1).
-            message: Optional status message.
-        """
-        if self._pbar is None:
-            return
-        
-        self._current += amount
-        self._pbar.update(amount)
-        
-        if message and hasattr(self._pbar, 'set_description'):
-            # Update description with message
-            self._pbar.set_description(f"{self._description} - {message}")
-    
-    def finish(self, message: Optional[str] = None) -> None:
-        """Finish progress tracking.
-        
-        Args:
-            message: Optional completion message.
-        """
-        if self._pbar is None:
-            return
-        
-        # Ensure we reach 100%
-        if self._current < self._total:
-            self._pbar.update(self._total - self._current)
-        
-        if message and hasattr(self._pbar, 'set_description'):
-            # Update description with message
-            self._pbar.set_description(f"{self._description} - {message}")
-        
-        self._pbar.close()
-        self._pbar = None
-
-
-class NoOpProgress(ProgressReporter):
-    """No-operation progress reporter for quiet mode."""
-    
-    def start(self, total: int, description: str = "") -> None:
-        """Start progress tracking (no-op)."""
-        pass
-    
-    def update(self, amount: int = 1, message: Optional[str] = None) -> None:
-        """Update progress (no-op)."""
-        pass
-    
-    def finish(self, message: Optional[str] = None) -> None:
-        """Finish progress tracking (no-op)."""
-        pass
-
-
-class LogProgress(ProgressReporter):
-    """Progress reporter that logs to standard logging."""
-    
-    def __init__(self, log_level: int = logging.INFO):
-        """Initialize the progress reporter.
-        
-        Args:
-            log_level: Logging level to use for progress messages.
-        """
-        self._log_level = log_level
-        self._total: int = 0
-        self._current: int = 0
-        self._description: str = ""
-    
-    def start(self, total: int, description: str = "") -> None:
-        """Start progress tracking.
-        
-        Args:
-            total: Total number of items to process.
-            description: Optional description of the operation.
-        """
-        self._total = total
-        self._current = 0
-        self._description = description
-        
-        logger.log(
-            self._log_level,
-            f"Starting: {description} (0/{total})"
-        )
-    
-    def update(self, amount: int = 1, message: Optional[str] = None) -> None:
-        """Update progress.
-        
-        Args:
-            amount: Number of items completed (default: 1).
-            message: Optional status message.
-        """
-        self._current += amount
-        
-        progress_pct = (self._current / self._total * 100) if self._total > 0 else 0
-        status = f"{self._description}: {self._current}/{self._total} ({progress_pct:.1f}%)"
-        
-        if message:
-            status += f" - {message}"
-        
-        logger.log(self._log_level, status)
-    
-    def finish(self, message: Optional[str] = None) -> None:
-        """Finish progress tracking.
-        
-        Args:
-            message: Optional completion message.
-        """
-        status = f"Completed: {self._description}"
-        if message:
-            status += f" - {message}"
-        
-        logger.log(self._log_level, status)
-
-
-class CallbackProgress(ProgressReporter):
-    """Progress reporter that calls user-provided callbacks."""
-    
-    def __init__(
-        self,
-        on_start: Optional[Callable[[int, str], None]] = None,
-        on_update: Optional[Callable[[int, int, Optional[str]], None]] = None,
-        on_finish: Optional[Callable[[Optional[str]], None]] = None,
-    ):
-        """Initialize the progress reporter with callbacks.
-        
-        Args:
-            on_start: Callback for start(total, description).
-            on_update: Callback for update(current, total, message).
-            on_finish: Callback for finish(message).
-        """
-        self._on_start = on_start
-        self._on_update = on_update
-        self._on_finish = on_finish
-        self._total: int = 0
-        self._current: int = 0
-    
-    def start(self, total: int, description: str = "") -> None:
-        """Start progress tracking.
-        
-        Args:
-            total: Total number of items to process.
-            description: Optional description of the operation.
-        """
-        self._total = total
-        self._current = 0
-        
-        if self._on_start:
-            self._on_start(total, description)
-    
-    def update(self, amount: int = 1, message: Optional[str] = None) -> None:
-        """Update progress.
-        
-        Args:
-            amount: Number of items completed (default: 1).
-            message: Optional status message.
-        """
-        self._current += amount
-        
-        if self._on_update:
-            self._on_update(self._current, self._total, message)
-    
-    def finish(self, message: Optional[str] = None) -> None:
-        """Finish progress tracking.
-        
-        Args:
-            message: Optional completion message.
-        """
-        if self._on_finish:
-            self._on_finish(message)
 </file>
 
 <file path="src/pedalboard_pluginary/protocols.py">
@@ -1103,6 +682,176 @@ def with_timeout(timeout: float) -> Callable[[F], F]:
         return wrapper  # type: ignore[return-value]
     
     return decorator
+</file>
+
+<file path="src/pedalboard_pluginary/timeout.py">
+"""
+Timeout handling for plugin operations.
+"""
+
+import asyncio
+import concurrent.futures
+import functools
+import logging
+from typing import Any, Awaitable, Callable, TypeVar, Union
+
+from .constants import PLUGIN_LOAD_TIMEOUT
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar('T')
+F = TypeVar('F', bound=Callable[..., Any])
+
+
+class TimeoutError(Exception):
+    """Raised when an operation times out."""
+    
+    def __init__(self, message: str, timeout: float):
+        super().__init__(message)
+        self.timeout = timeout
+
+
+def sync_timeout(func: Callable[..., T], timeout: float, *args: Any, **kwargs: Any) -> T:
+    """Execute synchronous function with timeout using ThreadPoolExecutor.
+    
+    Args:
+        func: Function to execute.
+        timeout: Timeout in seconds.
+        *args: Positional arguments for the function.
+        **kwargs: Keyword arguments for the function.
+        
+    Returns:
+        Function result.
+        
+    Raises:
+        TimeoutError: If function execution exceeds timeout.
+        Exception: Any exception raised by the function.
+    """
+    logger.debug(f"Executing {func.__name__} with {timeout}s timeout")
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(func, *args, **kwargs)
+        try:
+            result = future.result(timeout=timeout)
+            logger.debug(f"{func.__name__} completed successfully")
+            return result
+        except concurrent.futures.TimeoutError:
+            logger.warning(f"{func.__name__} timed out after {timeout}s")
+            # Cancel the future to prevent resource leaks
+            future.cancel()
+            raise TimeoutError(f"{func.__name__} timed out after {timeout}s", timeout)
+        except Exception as e:
+            logger.error(f"{func.__name__} failed: {e}")
+            raise
+
+
+async def async_timeout(coro_func: Callable[..., Awaitable[T]], timeout: float, *args: Any, **kwargs: Any) -> T:
+    """Execute coroutine function with timeout.
+    
+    Args:
+        coro_func: Coroutine function to execute.
+        timeout: Timeout in seconds.
+        *args: Positional arguments for the function.
+        **kwargs: Keyword arguments for the function.
+        
+    Returns:
+        Function result.
+        
+    Raises:
+        TimeoutError: If function execution exceeds timeout.
+        Exception: Any exception raised by the function.
+    """
+    logger.debug(f"Executing {coro_func.__name__} with {timeout}s timeout")
+    
+    try:
+        result: T = await asyncio.wait_for(coro_func(*args, **kwargs), timeout=timeout)
+        logger.debug(f"{coro_func.__name__} completed successfully")
+        return result
+    except asyncio.TimeoutError:
+        logger.warning(f"{coro_func.__name__} timed out after {timeout}s")
+        raise TimeoutError(f"{coro_func.__name__} timed out after {timeout}s", timeout)
+    except Exception as e:
+        logger.error(f"{coro_func.__name__} failed: {e}")
+        raise
+
+
+def with_sync_timeout(timeout: float = PLUGIN_LOAD_TIMEOUT) -> Callable[[F], F]:
+    """Decorator that adds timeout to synchronous functions.
+    
+    Args:
+        timeout: Timeout in seconds.
+        
+    Returns:
+        Decorated function.
+    """
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            return sync_timeout(func, timeout, *args, **kwargs)
+        return wrapper  # type: ignore[return-value]
+    return decorator
+
+
+def with_async_timeout(timeout: float = PLUGIN_LOAD_TIMEOUT) -> Callable[[F], F]:
+    """Decorator that adds timeout to async functions.
+    
+    Args:
+        timeout: Timeout in seconds.
+        
+    Returns:
+        Decorated function.
+    """
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            return await async_timeout(func, timeout, *args, **kwargs)
+        return async_wrapper  # type: ignore[return-value]
+    return decorator
+</file>
+
+<file path="src/pedalboard-stubs/__init__.pyi">
+"""Type stubs for pedalboard library."""
+
+from typing import Dict, Union, Any, Optional, TypeVar
+from pathlib import Path
+
+# Parameter value types that pedalboard can return
+ParameterValue = Union[float, int, bool, str]
+
+class Plugin:
+    """Base plugin class."""
+    
+    # Core attributes that all plugins have
+    parameters: Dict[str, ParameterValue]
+    name: str
+    manufacturer: Optional[str]
+    
+    def __init__(self, *args: Any, **kwargs: Any) -> None: ...
+
+class AudioUnitPlugin(Plugin):
+    """Audio Unit plugin class."""
+    pass
+
+class VST3Plugin(Plugin):
+    """VST3 plugin class."""
+    pass
+
+# Plugin loading function
+def load_plugin(
+    path_or_name: Union[str, Path], 
+    plugin_name: Optional[str] = None,
+    disable_caching: bool = False,
+    **kwargs: Any
+) -> Plugin: ...
+
+# Re-export common types
+__all__ = [
+    "Plugin",
+    "AudioUnitPlugin", 
+    "VST3Plugin",
+    "load_plugin",
+    "ParameterValue",
+]
 </file>
 
 <file path="tests/scanners/__init__.py">
@@ -1909,6 +1658,207 @@ Apache License
    limitations under the License.
 </file>
 
+<file path="src/pedalboard_pluginary/base_scanner.py">
+"""
+Base scanner class implementing common functionality for all plugin scanners.
+"""
+
+import logging
+import re
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import List, Optional
+
+from .models import PluginInfo
+from .protocols import PluginScanner
+
+logger = logging.getLogger(__name__)
+
+
+class BaseScanner(ABC):
+    """Base class for plugin scanner implementations."""
+    
+    def __init__(
+        self,
+        ignore_paths: Optional[List[str]] = None,
+        specific_paths: Optional[List[str]] = None,
+    ):
+        """Initialize the scanner with optional ignore paths and specific paths.
+        
+        Args:
+            ignore_paths: List of regex patterns for paths to ignore.
+            specific_paths: List of specific paths to scan (if provided, only these are scanned).
+        """
+        self.ignore_paths = ignore_paths or []
+        self.specific_paths = specific_paths or []
+        self._compiled_ignore_patterns = [re.compile(pattern) for pattern in self.ignore_paths]
+    
+    @property
+    @abstractmethod
+    def plugin_type(self) -> str:
+        """Return the plugin type this scanner handles (e.g., 'vst3', 'aufx')."""
+        ...
+    
+    @property
+    @abstractmethod
+    def supported_extensions(self) -> List[str]:
+        """Return list of file extensions this scanner supports."""
+        ...
+    
+    @abstractmethod
+    def find_plugin_files(self, paths: Optional[List[Path]] = None) -> List[Path]:
+        """Find all plugin files of this scanner's type.
+        
+        Args:
+            paths: Optional list of specific paths to check.
+            
+        Returns:
+            List of paths to plugin files found.
+        """
+        ...
+    
+    @abstractmethod
+    def scan_plugin(self, path: Path) -> Optional[PluginInfo]:
+        """Scan a single plugin file and return its information.
+        
+        Args:
+            path: Path to the plugin file to scan.
+            
+        Returns:
+            PluginInfo object if successful, None if scanning failed.
+        """
+        ...
+    
+    def validate_plugin_path(self, path: Path) -> bool:
+        """Validate if a path is a valid plugin for this scanner.
+        
+        Args:
+            path: Path to validate.
+            
+        Returns:
+            True if the path is a valid plugin file, False otherwise.
+        """
+        if not path.exists():
+            return False
+        
+        # Check extension
+        if path.suffix not in self.supported_extensions:
+            return False
+        
+        # Check against ignore patterns
+        if self._should_ignore_path(path):
+            return False
+        
+        # Check if specific paths are set and this path is in them
+        if self.specific_paths and str(path) not in self.specific_paths:
+            return False
+        
+        return True
+    
+    def _should_ignore_path(self, path: Path) -> bool:
+        """Check if a path should be ignored based on ignore patterns.
+        
+        Args:
+            path: Path to check.
+            
+        Returns:
+            True if the path should be ignored, False otherwise.
+        """
+        path_str = str(path)
+        for pattern in self._compiled_ignore_patterns:
+            if pattern.search(path_str):
+                logger.debug(f"Ignoring path {path} due to pattern {pattern.pattern}")
+                return True
+        return False
+    
+    def _filter_plugin_paths(self, paths: List[Path]) -> List[Path]:
+        """Filter plugin paths based on validation criteria.
+        
+        Args:
+            paths: List of paths to filter.
+            
+        Returns:
+            Filtered list of valid plugin paths.
+        """
+        valid_paths = []
+        for path in paths:
+            if self.validate_plugin_path(path):
+                valid_paths.append(path)
+            else:
+                logger.debug(f"Filtered out invalid plugin path: {path}")
+        
+        return valid_paths
+    
+    def _create_plugin_id(self, path: Path) -> str:
+        """Create a unique plugin ID from its path.
+        
+        Args:
+            path: Path to the plugin.
+            
+        Returns:
+            Unique plugin ID string.
+        """
+        return f"{self.plugin_type}/{path.stem}"
+</file>
+
+<file path="src/pedalboard_pluginary/constants.py">
+"""
+Constants and configuration values for pedalboard_pluginary.
+"""
+
+from typing import Final
+
+# Application metadata
+APP_NAME: Final[str] = "com.twardoch.pedalboard-pluginary"
+APP_VERSION: Final[str] = "0.1.0"  # TODO: Get from package metadata
+
+# Cache configuration
+CACHE_VERSION: Final[str] = "2.0.0"
+PLUGINS_CACHE_FILENAME: Final[str] = "plugins"
+IGNORES_CACHE_FILENAME: Final[str] = "ignores"
+
+# Scanner configuration
+DEFAULT_SCAN_TIMEOUT: Final[int] = 10  # seconds
+PLUGIN_LOAD_TIMEOUT: Final[float] = 10.0  # seconds for individual plugin loading
+MAX_SCAN_RETRIES: Final[int] = 3
+SCAN_RETRY_DELAY: Final[float] = 1.0  # seconds
+
+# Async scanning configuration
+DEFAULT_MAX_CONCURRENT: Final[int] = 10  # concurrent async scans
+MIN_CONCURRENT_SCANS: Final[int] = 1
+MAX_CONCURRENT_SCANS: Final[int] = 50
+
+# Plugin types
+PLUGIN_TYPE_VST3: Final[str] = "vst3"
+PLUGIN_TYPE_AU: Final[str] = "aufx"
+SUPPORTED_PLUGIN_TYPES: Final[list[str]] = [PLUGIN_TYPE_VST3, PLUGIN_TYPE_AU]
+
+# File extensions
+VST3_EXTENSION: Final[str] = ".vst3"
+AU_EXTENSION: Final[str] = ".component"
+
+# Platform names
+PLATFORM_WINDOWS: Final[str] = "Windows"
+PLATFORM_MACOS: Final[str] = "Darwin"
+PLATFORM_LINUX: Final[str] = "Linux"
+
+# Progress reporting
+DEFAULT_PROGRESS_BAR_WIDTH: Final[int] = 80
+PROGRESS_UPDATE_INTERVAL: Final[float] = 0.1  # seconds
+
+# Logging configuration
+LOG_FORMAT: Final[str] = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+LOG_DATE_FORMAT: Final[str] = "%Y-%m-%d %H:%M:%S"
+
+# CLI configuration
+DEFAULT_OUTPUT_FORMAT: Final[str] = "json"
+SUPPORTED_OUTPUT_FORMATS: Final[list[str]] = ["json", "yaml", "table", "csv"]
+
+# Resource paths
+RESOURCES_PACKAGE: Final[str] = "pedalboard_pluginary.resources"
+DEFAULT_IGNORES_FILENAME: Final[str] = "default_ignores.json"
+</file>
+
 <file path="src/pedalboard_pluginary/models.py">
 # pedalboard_pluginary/models.py
 """
@@ -1988,358 +1938,212 @@ class PluginInfo:
 #     print(json.dumps(asdict(example_plugin), indent=2))
 </file>
 
-<file path="src/pedalboard_pluginary/serialization.py">
+<file path="src/pedalboard_pluginary/progress.py">
 """
-Unified serialization module for plugin data.
+Progress reporting implementations.
 """
 
-import json
 import logging
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Optional
 
-from .constants import APP_VERSION, CACHE_VERSION
-from .exceptions import CacheCorruptedError, CacheVersionError, CacheWriteError
-from .models import PluginInfo, PluginParameter
-from .types import (
-    CacheData,
-    CacheMetadata,
-    SerializedParameter,
-    SerializedPlugin,
-    is_serialized_parameter,
-    is_serialized_plugin,
-)
-from .utils import ensure_folder
+from tqdm import tqdm
+
+from .protocols import ProgressReporter
 
 logger = logging.getLogger(__name__)
 
 
-class PluginSerializer:
-    """Handles serialization and deserialization of plugin data."""
+class TqdmProgress(ProgressReporter):
+    """Progress reporter using tqdm progress bars."""
     
-    @staticmethod
-    def parameter_to_dict(param: PluginParameter) -> SerializedParameter:
-        """Convert PluginParameter to serializable dictionary.
+    def __init__(self) -> None:
+        """Initialize the progress reporter."""
+        self._pbar: Optional[tqdm[Any]] = None
+        self._total: int = 0
+        self._current: int = 0
+        self._description: str = ""
+    
+    def start(self, total: int, description: str = "") -> None:
+        """Start progress tracking.
         
         Args:
-            param: PluginParameter object to serialize.
-            
-        Returns:
-            SerializedParameter dictionary.
+            total: Total number of items to process.
+            description: Optional description of the operation.
         """
-        return {
-            "name": param.name,
-            "value": param.value,
-        }
+        self._total = total
+        self._current = 0
+        self._description = description
+        self._pbar = tqdm(total=total, desc=description)
     
-    @staticmethod
-    def dict_to_parameter(data: Dict[str, Any]) -> Optional[PluginParameter]:
-        """Convert dictionary to PluginParameter with validation.
+    def update(self, amount: int = 1, message: Optional[str] = None) -> None:
+        """Update progress.
         
         Args:
-            data: Dictionary containing parameter data.
-            
-        Returns:
-            PluginParameter object if valid, None otherwise.
+            amount: Number of items completed (default: 1).
+            message: Optional status message.
         """
-        if not is_serialized_parameter(data):
-            logger.warning(f"Invalid parameter data: {data}")
-            return None
+        if self._pbar is None:
+            return
         
-        return PluginParameter(
-            name=data["name"],
-            value=data["value"],
+        self._current += amount
+        self._pbar.update(amount)
+        
+        if message and hasattr(self._pbar, 'set_description'):
+            # Update description with message
+            self._pbar.set_description(f"{self._description} - {message}")
+    
+    def finish(self, message: Optional[str] = None) -> None:
+        """Finish progress tracking.
+        
+        Args:
+            message: Optional completion message.
+        """
+        if self._pbar is None:
+            return
+        
+        # Ensure we reach 100%
+        if self._current < self._total:
+            self._pbar.update(self._total - self._current)
+        
+        if message and hasattr(self._pbar, 'set_description'):
+            # Update description with message
+            self._pbar.set_description(f"{self._description} - {message}")
+        
+        self._pbar.close()
+        self._pbar = None
+
+
+class NoOpProgress(ProgressReporter):
+    """No-operation progress reporter for quiet mode."""
+    
+    def start(self, total: int, description: str = "") -> None:
+        """Start progress tracking (no-op)."""
+        pass
+    
+    def update(self, amount: int = 1, message: Optional[str] = None) -> None:
+        """Update progress (no-op)."""
+        pass
+    
+    def finish(self, message: Optional[str] = None) -> None:
+        """Finish progress tracking (no-op)."""
+        pass
+
+
+class LogProgress(ProgressReporter):
+    """Progress reporter that logs to standard logging."""
+    
+    def __init__(self, log_level: int = logging.INFO):
+        """Initialize the progress reporter.
+        
+        Args:
+            log_level: Logging level to use for progress messages.
+        """
+        self._log_level = log_level
+        self._total: int = 0
+        self._current: int = 0
+        self._description: str = ""
+    
+    def start(self, total: int, description: str = "") -> None:
+        """Start progress tracking.
+        
+        Args:
+            total: Total number of items to process.
+            description: Optional description of the operation.
+        """
+        self._total = total
+        self._current = 0
+        self._description = description
+        
+        logger.log(
+            self._log_level,
+            f"Starting: {description} (0/{total})"
         )
     
-    @staticmethod
-    def plugin_to_dict(plugin: PluginInfo) -> SerializedPlugin:
-        """Convert PluginInfo to serializable dictionary.
+    def update(self, amount: int = 1, message: Optional[str] = None) -> None:
+        """Update progress.
         
         Args:
-            plugin: PluginInfo object to serialize.
-            
-        Returns:
-            SerializedPlugin dictionary.
+            amount: Number of items completed (default: 1).
+            message: Optional status message.
         """
-        # Convert parameters
-        params_dict: Dict[str, SerializedParameter] = {}
-        for param_name, param in plugin.parameters.items():
-            params_dict[param_name] = PluginSerializer.parameter_to_dict(param)
+        self._current += amount
         
-        result: SerializedPlugin = {
-            "id": plugin.id,
-            "name": plugin.name,
-            "path": plugin.path,
-            "filename": plugin.filename,
-            "plugin_type": plugin.plugin_type,
-            "parameters": params_dict,
-            "manufacturer": plugin.manufacturer,
-            "name_in_file": plugin.name_in_file,
-        }
+        progress_pct = (self._current / self._total * 100) if self._total > 0 else 0
+        status = f"{self._description}: {self._current}/{self._total} ({progress_pct:.1f}%)"
         
-        return result
+        if message:
+            status += f" - {message}"
+        
+        logger.log(self._log_level, status)
     
-    @staticmethod
-    def dict_to_plugin(data: Dict[str, Any]) -> Optional[PluginInfo]:
-        """Convert dictionary to PluginInfo with validation.
+    def finish(self, message: Optional[str] = None) -> None:
+        """Finish progress tracking.
         
         Args:
-            data: Dictionary containing plugin data.
-            
-        Returns:
-            PluginInfo object if valid, None otherwise.
+            message: Optional completion message.
         """
-        if not is_serialized_plugin(data):
-            logger.warning(f"Invalid plugin data for ID: {data.get('id', 'unknown')}")
-            return None
+        status = f"Completed: {self._description}"
+        if message:
+            status += f" - {message}"
         
-        # Convert parameters
-        params: Dict[str, PluginParameter] = {}
-        for param_name, param_data in data.get("parameters", {}).items():
-            param = PluginSerializer.dict_to_parameter(param_data)
-            if param:
-                params[param_name] = param
-        
-        return PluginInfo(
-            id=data["id"],
-            name=data["name"],
-            path=data["path"],
-            filename=data["filename"],
-            plugin_type=data["plugin_type"],
-            parameters=params,
-            manufacturer=data.get("manufacturer"),
-            name_in_file=data.get("name_in_file"),
-        )
+        logger.log(self._log_level, status)
+
+
+class CallbackProgress(ProgressReporter):
+    """Progress reporter that calls user-provided callbacks."""
     
-    @classmethod
-    def create_cache_metadata(cls, plugin_count: int) -> CacheMetadata:
-        """Create cache metadata.
+    def __init__(
+        self,
+        on_start: Optional[Callable[[int, str], None]] = None,
+        on_update: Optional[Callable[[int, int, Optional[str]], None]] = None,
+        on_finish: Optional[Callable[[Optional[str]], None]] = None,
+    ):
+        """Initialize the progress reporter with callbacks.
         
         Args:
-            plugin_count: Number of plugins in the cache.
-            
-        Returns:
-            CacheMetadata dictionary.
+            on_start: Callback for start(total, description).
+            on_update: Callback for update(current, total, message).
+            on_finish: Callback for finish(message).
         """
-        now = datetime.utcnow().isoformat()
-        return {
-            "version": CACHE_VERSION,
-            "created_at": now,
-            "updated_at": now,
-            "plugin_count": plugin_count,
-            "scanner_version": APP_VERSION,
-        }
+        self._on_start = on_start
+        self._on_update = on_update
+        self._on_finish = on_finish
+        self._total: int = 0
+        self._current: int = 0
     
-    @classmethod
-    def save_plugins(cls, plugins: Dict[str, PluginInfo], path: Path) -> None:
-        """Save plugins to JSON file with metadata and error handling.
+    def start(self, total: int, description: str = "") -> None:
+        """Start progress tracking.
         
         Args:
-            plugins: Dictionary mapping plugin IDs to PluginInfo objects.
-            path: Path to the cache file.
+            total: Total number of items to process.
+            description: Optional description of the operation.
         """
-        ensure_folder(path.parent)
+        self._total = total
+        self._current = 0
         
-        # Convert plugins to serializable format
-        plugins_dict: Dict[str, SerializedPlugin] = {}
-        for plugin_id, plugin in plugins.items():
-            try:
-                plugins_dict[plugin_id] = cls.plugin_to_dict(plugin)
-            except Exception as e:
-                logger.error(f"Failed to serialize plugin {plugin_id}: {e}")
-                continue
-        
-        # Create cache data with metadata
-        cache_data: CacheData = {
-            "metadata": cls.create_cache_metadata(len(plugins_dict)),
-            "plugins": plugins_dict,
-        }
-        
-        # Write to file with error handling
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f, indent=2)
-            logger.info(f"Saved {len(plugins_dict)} plugins to {path}")
-        except Exception as e:
-            logger.error(f"Failed to save plugins to {path}: {e}")
-            raise CacheWriteError(str(path), str(e))
+        if self._on_start:
+            self._on_start(total, description)
     
-    @classmethod
-    def load_plugins(cls, path: Path) -> Dict[str, PluginInfo]:
-        """Load plugins from JSON file with validation.
+    def update(self, amount: int = 1, message: Optional[str] = None) -> None:
+        """Update progress.
         
         Args:
-            path: Path to the cache file.
-            
-        Returns:
-            Dictionary mapping plugin IDs to PluginInfo objects.
+            amount: Number of items completed (default: 1).
+            message: Optional status message.
         """
-        if not path.exists():
-            logger.info(f"Cache file not found: {path}")
-            return {}
+        self._current += amount
         
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in cache file {path}: {e}")
-            raise CacheCorruptedError(str(path), f"JSON decode error: {e}")
-        except Exception as e:
-            logger.error(f"Failed to read cache file {path}: {e}")
-            raise CacheCorruptedError(str(path), str(e))
-        
-        # Handle both old format (direct plugin dict) and new format (with metadata)
-        if isinstance(data, dict) and "metadata" in data and "plugins" in data:
-            # New format with metadata
-            metadata = data.get("metadata", {})
-            cache_version = metadata.get("version", "1.0.0")
-            
-            if cache_version != CACHE_VERSION:
-                logger.warning(f"Cache version mismatch: expected {CACHE_VERSION}, got {cache_version}")
-                raise CacheVersionError(CACHE_VERSION, cache_version, str(path))
-            
-            plugins_data = data.get("plugins", {})
-        else:
-            # Old format - direct plugin dictionary
-            logger.info("Loading cache in legacy format")
-            plugins_data = data
-        
-        # Convert to PluginInfo objects
-        plugins: Dict[str, PluginInfo] = {}
-        for plugin_id, plugin_data in plugins_data.items():
-            if not isinstance(plugin_data, dict):
-                logger.warning(f"Invalid plugin data for ID {plugin_id}")
-                continue
-            
-            plugin = cls.dict_to_plugin(plugin_data)
-            if plugin:
-                plugins[plugin_id] = plugin
-            else:
-                logger.warning(f"Failed to deserialize plugin {plugin_id}")
-        
-        logger.info(f"Loaded {len(plugins)} plugins from {path}")
-        return plugins
+        if self._on_update:
+            self._on_update(self._current, self._total, message)
     
-    @classmethod
-    def migrate_cache(cls, old_data: Dict[str, Any], old_version: str, new_version: str) -> Dict[str, Any]:
-        """Migrate cache data from old version to new version.
+    def finish(self, message: Optional[str] = None) -> None:
+        """Finish progress tracking.
         
         Args:
-            old_data: Cache data in old format.
-            old_version: Version of the old cache format.
-            new_version: Target version to migrate to.
-            
-        Returns:
-            Migrated cache data.
+            message: Optional completion message.
         """
-        # TODO: Implement cache migration logic as needed
-        logger.info(f"Migrating cache from version {old_version} to {new_version}")
-        return old_data
-</file>
-
-<file path="src/pedalboard_pluginary/types.py">
-"""
-Type definitions and aliases for the pedalboard_pluginary package.
-"""
-
-from typing import Union, Dict, Any, TypedDict, Optional
-import sys
-
-if sys.version_info >= (3, 11):
-    from typing import NotRequired
-else:
-    from typing_extensions import NotRequired
-
-# Basic type aliases
-ParameterValue = Union[float, bool, str]
-PluginID = str
-PluginType = str  # "vst3" or "aufx"
-PluginPath = str  # String representation of path for JSON serialization
-
-
-class SerializedParameter(TypedDict):
-    """TypedDict for serialized plugin parameter."""
-    name: str
-    value: ParameterValue
-
-
-class SerializedPlugin(TypedDict):
-    """TypedDict for serialized plugin data."""
-    id: str
-    name: str
-    path: str
-    filename: str
-    plugin_type: str
-    parameters: Dict[str, SerializedParameter]
-    manufacturer: NotRequired[Optional[str]]
-    name_in_file: NotRequired[Optional[str]]
-
-
-class CacheMetadata(TypedDict):
-    """TypedDict for cache metadata."""
-    version: str
-    created_at: str
-    updated_at: str
-    plugin_count: int
-    scanner_version: str
-
-
-class CacheData(TypedDict):
-    """TypedDict for complete cache data structure."""
-    metadata: CacheMetadata
-    plugins: Dict[str, SerializedPlugin]
-
-
-# Type guards
-def is_parameter_value(value: Any) -> bool:
-    """Check if a value is a valid ParameterValue."""
-    return isinstance(value, (float, bool, str))
-
-
-def is_serialized_parameter(data: Any) -> bool:
-    """Check if data is a valid SerializedParameter."""
-    return (
-        isinstance(data, dict) and
-        "name" in data and
-        "value" in data and
-        isinstance(data["name"], str) and
-        is_parameter_value(data["value"])
-    )
-
-
-def is_serialized_plugin(data: Any) -> bool:
-    """Check if data is a valid SerializedPlugin."""
-    if not isinstance(data, dict):
-        return False
-    
-    required_fields = ["id", "name", "path", "filename", "plugin_type", "parameters"]
-    for field in required_fields:
-        if field not in data:
-            return False
-    
-    # Check types of required fields
-    if not all(isinstance(data[field], str) for field in ["id", "name", "path", "filename", "plugin_type"]):
-        return False
-    
-    # Check parameters
-    if not isinstance(data["parameters"], dict):
-        return False
-    
-    for param_name, param_data in data["parameters"].items():
-        if not isinstance(param_name, str) or not is_serialized_parameter(param_data):
-            return False
-    
-    # Check optional fields
-    if "manufacturer" in data and data["manufacturer"] is not None:
-        if not isinstance(data["manufacturer"], str):
-            return False
-    
-    if "name_in_file" in data and data["name_in_file"] is not None:
-        if not isinstance(data["name_in_file"], str):
-            return False
-    
-    return True
+        if self._on_finish:
+            self._on_finish(message)
 </file>
 
 <file path="tests/scanners/test_vst3_scanner.py">
@@ -2777,464 +2581,6 @@ repos:
 * Adam Twardoch <adam+github@twardoch.com>
 </file>
 
-<file path="PLAN.md">
-# Pedalboard Pluginary - Streamlined Implementation Plan
-
-## Executive Summary
-
-This document outlines the remaining work needed to transform Pedalboard Pluginary into a production-ready, high-performance plugin scanner. Based on comprehensive analysis, we've identified critical gaps in performance, testing, and user experience that must be addressed.
-
-## Current State Assessment
-
-### Completed ✅
-- Scanner abstraction with protocols and base classes
-- Type safety infrastructure with TypedDict and type guards
-- Unified serialization layer
-- Custom exception hierarchy
-- Progress reporting abstraction
-- Basic error handling and retry logic
-- Constants module for configuration
-
-### Critical Gaps ❌
-- No async/concurrent scanning (major performance bottleneck)
-- Limited test coverage (~40%)
-- Type stubs missing for pedalboard library
-- CLI using outdated Fire library
-- No timeout handling for hanging plugins
-- Single-platform CI/CD pipeline
-
-## Phase 1: Critical Fixes and Type Safety (Immediate - Week 1)
-
-### 1.1 Create Pedalboard Type Stubs
-
-**Problem**: The pedalboard library lacks type annotations, causing numerous mypy errors and requiring type: ignore comments.
-
-**Solution**: Create comprehensive type stubs package.
-
-```python
-# src/pedalboard-stubs/__init__.pyi
-from typing import Dict, Union, Any, Optional
-
-class Plugin:
-    parameters: Dict[str, Union[float, bool, str]]
-    name: str
-    manufacturer: str
-    
-class AudioUnitPlugin(Plugin): ...
-class VST3Plugin(Plugin): ...
-
-def load_plugin(path: str, plugin_name: Optional[str] = None) -> Plugin: ...
-```
-
-**Implementation Steps**:
-1. Create `pedalboard-stubs` directory in src
-2. Define interfaces for all pedalboard classes we use
-3. Add stubs to mypy configuration
-4. Remove all type: ignore comments
-
-### 1.2 Implement Timeout Handling
-
-**Problem**: Plugin loading can hang indefinitely on corrupted or incompatible plugins.
-
-**Solution**: Add configurable timeouts using threading or asyncio.
-
-```python
-# src/pedalboard_pluginary/timeout.py
-import asyncio
-import concurrent.futures
-from typing import TypeVar, Callable, Any
-
-T = TypeVar('T')
-
-async def with_timeout(coro: Callable[..., T], timeout: float, *args, **kwargs) -> T:
-    """Execute coroutine with timeout."""
-    return await asyncio.wait_for(coro(*args, **kwargs), timeout)
-
-def sync_timeout(func: Callable[..., T], timeout: float, *args, **kwargs) -> T:
-    """Execute synchronous function with timeout."""
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(func, *args, **kwargs)
-        return future.result(timeout=timeout)
-```
-
-### 1.3 Fix Remaining Type Issues
-
-**Tasks**:
-1. Replace all `Dict[Any, Any]` with specific types
-2. Add return type annotations to all functions
-3. Fix SerializedPlugin TypedDict to properly handle optional fields
-4. Ensure 100% type coverage with mypy strict mode
-
-## Phase 2: Performance Revolution (Week 2)
-
-### 2.1 Async Scanner Implementation
-
-**Problem**: Sequential scanning is extremely slow for large plugin libraries.
-
-**Solution**: Implement fully async scanner architecture.
-
-```python
-# src/pedalboard_pluginary/async_scanner.py
-import asyncio
-from typing import List, Optional, AsyncIterator
-from .protocols import PluginScanner
-from .models import PluginInfo
-
-class AsyncScannerMixin:
-    """Mixin to add async capabilities to scanners."""
-    
-    async def scan_plugin_async(self, path: Path) -> Optional[PluginInfo]:
-        """Async wrapper for plugin scanning."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.scan_plugin, path)
-    
-    async def scan_plugins_batch(
-        self, 
-        paths: List[Path], 
-        max_concurrent: int = 10
-    ) -> AsyncIterator[PluginInfo]:
-        """Scan multiple plugins concurrently."""
-        semaphore = asyncio.Semaphore(max_concurrent)
-        
-        async def scan_with_semaphore(path: Path) -> Optional[PluginInfo]:
-            async with semaphore:
-                return await self.scan_plugin_async(path)
-        
-        tasks = [scan_with_semaphore(path) for path in paths]
-        for coro in asyncio.as_completed(tasks):
-            result = await coro
-            if result:
-                yield result
-```
-
-**Implementation Steps**:
-1. Create AsyncVST3Scanner and AsyncAUScanner
-2. Implement connection pooling for plugin processes
-3. Add configurable concurrency limits
-4. Update PedalboardScanner to support async mode
-5. Benchmark performance improvements (target: 5-10x speedup)
-
-### 2.2 Efficient Cache Management
-
-**Problem**: Loading entire cache into memory is inefficient for large libraries.
-
-**Solution**: Implement lazy loading and indexed access.
-
-```python
-# src/pedalboard_pluginary/cache/sqlite_backend.py
-import sqlite3
-from typing import Dict, Optional, Iterator
-from ..models import PluginInfo
-
-class SQLiteCacheBackend:
-    """SQLite-based cache with indexed access."""
-    
-    def __init__(self, db_path: Path):
-        self.db_path = db_path
-        self._init_db()
-    
-    def get(self, plugin_id: str) -> Optional[PluginInfo]:
-        """Get single plugin without loading entire cache."""
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT data FROM plugins WHERE id = ?", 
-                (plugin_id,)
-            ).fetchone()
-            return self._deserialize(row[0]) if row else None
-    
-    def search(self, query: str) -> Iterator[PluginInfo]:
-        """Search plugins without loading all data."""
-        with self._connect() as conn:
-            for row in conn.execute(
-                "SELECT data FROM plugins WHERE name LIKE ? OR manufacturer LIKE ?",
-                (f"%{query}%", f"%{query}%")
-            ):
-                yield self._deserialize(row[0])
-```
-
-## Phase 3: CLI Revolution (Week 3)
-
-### 3.1 Migrate to Click
-
-**Problem**: Fire library lacks features needed for professional CLI.
-
-**Solution**: Complete rewrite using Click with rich features.
-
-```python
-# src/pedalboard_pluginary/cli.py
-import click
-from rich.console import Console
-from rich.table import Table
-from .core import PedalboardPluginary
-
-console = Console()
-
-@click.group()
-@click.version_option()
-def cli():
-    """Pedalboard Pluginary - Audio plugin scanner and manager."""
-    pass
-
-@cli.command()
-@click.option('--async/--sync', default=True, help='Use async scanning')
-@click.option('--concurrency', default=10, help='Max concurrent scans')
-@click.option('--timeout', default=10.0, help='Plugin load timeout')
-@click.option('--format', type=click.Choice(['json', 'yaml', 'table', 'csv']))
-def scan(async_, concurrency, timeout, format):
-    """Scan system for audio plugins."""
-    with console.status("Scanning plugins..."):
-        scanner = PedalboardPluginary(
-            async_mode=async_,
-            max_concurrent=concurrency,
-            timeout=timeout
-        )
-        plugins = scanner.scan()
-    
-    _output_plugins(plugins, format)
-
-@cli.command()
-@click.argument('plugin_id')
-@click.option('--params/--no-params', default=True)
-def info(plugin_id, params):
-    """Show detailed information about a plugin."""
-    # Implementation
-```
-
-### 3.2 Interactive TUI Mode
-
-**Solution**: Add textual-based TUI for plugin browsing.
-
-```python
-# src/pedalboard_pluginary/tui.py
-from textual.app import App
-from textual.widgets import ListView, DataTable
-
-class PluginBrowser(App):
-    """Interactive plugin browser."""
-    
-    async def on_mount(self):
-        # Load plugins
-        # Setup UI
-        # Handle events
-```
-
-## Phase 4: Testing Excellence (Week 4)
-
-### 4.1 Comprehensive Test Suite
-
-**Target**: 90%+ coverage with real-world scenarios.
-
-```python
-# tests/integration/test_full_workflow.py
-import pytest
-from pathlib import Path
-from pedalboard_pluginary import PedalboardPluginary
-
-@pytest.fixture
-def test_plugins_dir():
-    """Directory with test plugin files."""
-    return Path(__file__).parent / "fixtures" / "plugins"
-
-async def test_async_scanning_performance(test_plugins_dir, benchmark):
-    """Test async scanning is faster than sync."""
-    scanner = PedalboardPluginary(async_mode=True)
-    
-    async def scan_async():
-        return await scanner.scan_directory_async(test_plugins_dir)
-    
-    result = benchmark(asyncio.run, scan_async)
-    assert len(result) > 0
-
-def test_timeout_handling(mock_hanging_plugin):
-    """Test that hanging plugins are handled gracefully."""
-    scanner = PedalboardPluginary(timeout=1.0)
-    result = scanner.scan_plugin(mock_hanging_plugin)
-    assert result is None
-```
-
-### 4.2 Cross-Platform CI/CD
-
-```yaml
-# .github/workflows/test.yml
-name: Test
-on: [push, pull_request]
-
-jobs:
-  test:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ['3.9', '3.10', '3.11', '3.12']
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-      - run: pip install -e .[dev]
-      - run: pytest --cov=pedalboard_pluginary --cov-report=xml
-      - uses: codecov/codecov-action@v3
-```
-
-## Phase 5: Developer Experience (Week 5)
-
-### 5.1 Pre-commit Configuration
-
-```yaml
-# .pre-commit-config.yaml
-repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.0
-    hooks:
-      - id: ruff
-      - id: ruff-format
-  
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.7.0
-    hooks:
-      - id: mypy
-        additional_dependencies: [types-all]
-```
-
-### 5.2 Documentation System
-
-```python
-# docs/conf.py
-extensions = [
-    'sphinx.ext.autodoc',
-    'sphinx.ext.napoleon',
-    'sphinx_rtd_theme',
-    'sphinx_click',
-]
-
-# Auto-generate API docs from docstrings
-```
-
-## Phase 6: Advanced Features (Week 6)
-
-### 6.1 Plugin Categorization
-
-```python
-# src/pedalboard_pluginary/categorizer.py
-from enum import Enum
-from typing import List
-
-class PluginCategory(Enum):
-    EQUALIZER = "eq"
-    COMPRESSOR = "comp"
-    REVERB = "reverb"
-    DELAY = "delay"
-    MODULATION = "mod"
-    DISTORTION = "dist"
-    UTILITY = "util"
-
-def categorize_plugin(plugin: PluginInfo) -> List[PluginCategory]:
-    """Auto-categorize plugin based on name and parameters."""
-    categories = []
-    
-    # Rule-based categorization
-    if any(word in plugin.name.lower() for word in ['eq', 'equalizer']):
-        categories.append(PluginCategory.EQUALIZER)
-    
-    # Parameter-based categorization
-    param_names = {p.name.lower() for p in plugin.parameters.values()}
-    if 'threshold' in param_names and 'ratio' in param_names:
-        categories.append(PluginCategory.COMPRESSOR)
-    
-    return categories
-```
-
-### 6.2 Export Formats
-
-```python
-# src/pedalboard_pluginary/exporters.py
-import csv
-from typing import List
-from .models import PluginInfo
-
-class CSVExporter:
-    """Export plugins to CSV format."""
-    
-    def export(self, plugins: List[PluginInfo], output_path: Path):
-        with open(output_path, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=[
-                'id', 'name', 'type', 'manufacturer', 'path', 'category'
-            ])
-            writer.writeheader()
-            for plugin in plugins:
-                writer.writerow(self._plugin_to_row(plugin))
-```
-
-## Implementation Timeline
-
-### Week 1: Foundation
-- [ ] Create pedalboard type stubs
-- [ ] Implement timeout handling
-- [ ] Fix all remaining type issues
-- [ ] Achieve 100% mypy compliance
-
-### Week 2: Performance
-- [ ] Implement async scanner architecture
-- [ ] Add concurrent scanning support
-- [ ] Create SQLite cache backend
-- [ ] Benchmark performance improvements
-
-### Week 3: User Experience
-- [ ] Migrate from Fire to Click
-- [ ] Add rich output formatting
-- [ ] Implement interactive TUI
-- [ ] Add command completion
-
-### Week 4: Quality Assurance
-- [ ] Write comprehensive test suite
-- [ ] Set up cross-platform CI/CD
-- [ ] Add coverage reporting
-- [ ] Create integration tests
-
-### Week 5: Developer Experience
-- [ ] Configure pre-commit hooks
-- [ ] Set up Sphinx documentation
-- [ ] Write API documentation
-- [ ] Create contributor guide
-
-### Week 6: Advanced Features
-- [ ] Implement plugin categorization
-- [ ] Add export formats
-- [ ] Create plugin presets
-- [ ] Add search functionality
-
-## Success Metrics
-
-### Performance
-- Async scanning: 5-10x faster than sync
-- Memory usage: < 50MB for 1000 plugins
-- Timeout handling: 100% of hanging plugins handled
-
-### Quality
-- Test coverage: > 90%
-- Type coverage: 100%
-- Documentation: 100% of public APIs
-
-### Usability
-- CLI response time: < 100ms
-- Clear error messages
-- Intuitive command structure
-
-## Risk Mitigation
-
-### Technical Risks
-1. **Pedalboard API changes**: Version pin and test against multiple versions
-2. **Platform differences**: Extensive cross-platform testing
-3. **Performance regression**: Automated benchmarks in CI
-
-### Implementation Risks
-1. **Scope creep**: Strict phase boundaries
-2. **Breaking changes**: Deprecation warnings and migration guides
-3. **Complexity growth**: Regular refactoring sessions
-
-## Conclusion
-
-This streamlined plan focuses on the most critical improvements needed to make Pedalboard Pluginary production-ready. By addressing performance through async implementation, improving the user experience with a modern CLI, and ensuring quality through comprehensive testing, we can deliver a professional-grade tool that meets the needs of audio professionals and developers alike.
-</file>
-
 <file path="tox.ini">
 # Tox configuration file
 # Read more under https://tox.wiki/
@@ -3376,6 +2722,360 @@ finally:
 from .core import PedalboardPluginary
 </file>
 
+<file path="src/pedalboard_pluginary/serialization.py">
+"""
+Unified serialization module for plugin data.
+"""
+
+import json
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+from .constants import APP_VERSION, CACHE_VERSION
+from .exceptions import CacheCorruptedError, CacheVersionError, CacheWriteError
+from .models import PluginInfo, PluginParameter
+from .types import (
+    CacheData,
+    CacheMetadata,
+    SerializedParameter,
+    SerializedPlugin,
+    is_serialized_parameter,
+    is_serialized_plugin,
+)
+from .utils import ensure_folder
+
+logger = logging.getLogger(__name__)
+
+
+class PluginSerializer:
+    """Handles serialization and deserialization of plugin data."""
+    
+    @staticmethod
+    def parameter_to_dict(param: PluginParameter) -> SerializedParameter:
+        """Convert PluginParameter to serializable dictionary.
+        
+        Args:
+            param: PluginParameter object to serialize.
+            
+        Returns:
+            SerializedParameter dictionary.
+        """
+        return {
+            "name": param.name,
+            "value": param.value,
+        }
+    
+    @staticmethod
+    def dict_to_parameter(data: Dict[str, Any]) -> Optional[PluginParameter]:
+        """Convert dictionary to PluginParameter with validation.
+        
+        Args:
+            data: Dictionary containing parameter data.
+            
+        Returns:
+            PluginParameter object if valid, None otherwise.
+        """
+        if not is_serialized_parameter(data):
+            logger.warning(f"Invalid parameter data: {data}")
+            return None
+        
+        return PluginParameter(
+            name=data["name"],
+            value=data["value"],
+        )
+    
+    @staticmethod
+    def plugin_to_dict(plugin: PluginInfo) -> SerializedPlugin:
+        """Convert PluginInfo to serializable dictionary.
+        
+        Args:
+            plugin: PluginInfo object to serialize.
+            
+        Returns:
+            SerializedPlugin dictionary.
+        """
+        # Convert parameters
+        params_dict: Dict[str, SerializedParameter] = {}
+        for param_name, param in plugin.parameters.items():
+            params_dict[param_name] = PluginSerializer.parameter_to_dict(param)
+        
+        result: SerializedPlugin = {
+            "id": plugin.id,
+            "name": plugin.name,
+            "path": plugin.path,
+            "filename": plugin.filename,
+            "plugin_type": plugin.plugin_type,
+            "parameters": params_dict,
+            "manufacturer": plugin.manufacturer,
+            "name_in_file": plugin.name_in_file,
+        }
+        
+        return result
+    
+    @staticmethod
+    def dict_to_plugin(data: Dict[str, Any]) -> Optional[PluginInfo]:
+        """Convert dictionary to PluginInfo with validation.
+        
+        Args:
+            data: Dictionary containing plugin data.
+            
+        Returns:
+            PluginInfo object if valid, None otherwise.
+        """
+        if not is_serialized_plugin(data):
+            logger.warning(f"Invalid plugin data for ID: {data.get('id', 'unknown')}")
+            return None
+        
+        # Convert parameters
+        params: Dict[str, PluginParameter] = {}
+        for param_name, param_data in data.get("parameters", {}).items():
+            param = PluginSerializer.dict_to_parameter(param_data)
+            if param:
+                params[param_name] = param
+        
+        return PluginInfo(
+            id=data["id"],
+            name=data["name"],
+            path=data["path"],
+            filename=data["filename"],
+            plugin_type=data["plugin_type"],
+            parameters=params,
+            manufacturer=data.get("manufacturer"),
+            name_in_file=data.get("name_in_file"),
+        )
+    
+    @classmethod
+    def create_cache_metadata(cls, plugin_count: int) -> CacheMetadata:
+        """Create cache metadata.
+        
+        Args:
+            plugin_count: Number of plugins in the cache.
+            
+        Returns:
+            CacheMetadata dictionary.
+        """
+        now = datetime.utcnow().isoformat()
+        return {
+            "version": CACHE_VERSION,
+            "created_at": now,
+            "updated_at": now,
+            "plugin_count": plugin_count,
+            "scanner_version": APP_VERSION,
+        }
+    
+    @classmethod
+    def save_plugins(cls, plugins: Dict[str, PluginInfo], path: Path) -> None:
+        """Save plugins to JSON file with metadata and error handling.
+        
+        Args:
+            plugins: Dictionary mapping plugin IDs to PluginInfo objects.
+            path: Path to the cache file.
+        """
+        ensure_folder(path.parent)
+        
+        # Convert plugins to serializable format
+        plugins_dict: Dict[str, SerializedPlugin] = {}
+        for plugin_id, plugin in plugins.items():
+            try:
+                plugins_dict[plugin_id] = cls.plugin_to_dict(plugin)
+            except Exception as e:
+                logger.error(f"Failed to serialize plugin {plugin_id}: {e}")
+                continue
+        
+        # Create cache data with metadata
+        cache_data: CacheData = {
+            "metadata": cls.create_cache_metadata(len(plugins_dict)),
+            "plugins": plugins_dict,
+        }
+        
+        # Write to file with error handling
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, indent=2)
+            logger.info(f"Saved {len(plugins_dict)} plugins to {path}")
+        except Exception as e:
+            logger.error(f"Failed to save plugins to {path}: {e}")
+            raise CacheWriteError(str(path), str(e))
+    
+    @classmethod
+    def load_plugins(cls, path: Path) -> Dict[str, PluginInfo]:
+        """Load plugins from JSON file with validation.
+        
+        Args:
+            path: Path to the cache file.
+            
+        Returns:
+            Dictionary mapping plugin IDs to PluginInfo objects.
+        """
+        if not path.exists():
+            logger.info(f"Cache file not found: {path}")
+            return {}
+        
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in cache file {path}: {e}")
+            raise CacheCorruptedError(str(path), f"JSON decode error: {e}")
+        except Exception as e:
+            logger.error(f"Failed to read cache file {path}: {e}")
+            raise CacheCorruptedError(str(path), str(e))
+        
+        # Handle both old format (direct plugin dict) and new format (with metadata)
+        if isinstance(data, dict) and "metadata" in data and "plugins" in data:
+            # New format with metadata
+            metadata = data.get("metadata", {})
+            cache_version = metadata.get("version", "1.0.0")
+            
+            if cache_version != CACHE_VERSION:
+                logger.warning(f"Cache version mismatch: expected {CACHE_VERSION}, got {cache_version}")
+                raise CacheVersionError(CACHE_VERSION, cache_version, str(path))
+            
+            plugins_data = data.get("plugins", {})
+        else:
+            # Old format - direct plugin dictionary
+            logger.info("Loading cache in legacy format")
+            plugins_data = data
+        
+        # Convert to PluginInfo objects
+        plugins: Dict[str, PluginInfo] = {}
+        for plugin_id, plugin_data in plugins_data.items():
+            if not isinstance(plugin_data, dict):
+                logger.warning(f"Invalid plugin data for ID {plugin_id}")
+                continue
+            
+            plugin = cls.dict_to_plugin(plugin_data)
+            if plugin:
+                plugins[plugin_id] = plugin
+            else:
+                logger.warning(f"Failed to deserialize plugin {plugin_id}")
+        
+        logger.info(f"Loaded {len(plugins)} plugins from {path}")
+        return plugins
+    
+    @classmethod
+    def migrate_cache(cls, old_data: Dict[str, Any], old_version: str, new_version: str) -> Dict[str, Any]:
+        """Migrate cache data from old version to new version.
+        
+        Args:
+            old_data: Cache data in old format.
+            old_version: Version of the old cache format.
+            new_version: Target version to migrate to.
+            
+        Returns:
+            Migrated cache data.
+        """
+        # TODO: Implement cache migration logic as needed
+        logger.info(f"Migrating cache from version {old_version} to {new_version}")
+        return old_data
+</file>
+
+<file path="src/pedalboard_pluginary/types.py">
+"""
+Type definitions and aliases for the pedalboard_pluginary package.
+"""
+
+from typing import Union, Dict, Any, TypedDict, Optional
+import sys
+
+if sys.version_info >= (3, 11):
+    from typing import NotRequired
+else:
+    from typing_extensions import NotRequired
+
+# Basic type aliases
+ParameterValue = Union[float, bool, str]
+PluginID = str
+PluginType = str  # "vst3" or "aufx"
+PluginPath = str  # String representation of path for JSON serialization
+
+
+class SerializedParameter(TypedDict):
+    """TypedDict for serialized plugin parameter."""
+    name: str
+    value: ParameterValue
+
+
+class SerializedPlugin(TypedDict):
+    """TypedDict for serialized plugin data."""
+    id: str
+    name: str
+    path: str
+    filename: str
+    plugin_type: str
+    parameters: Dict[str, SerializedParameter]
+    manufacturer: NotRequired[Optional[str]]
+    name_in_file: NotRequired[Optional[str]]
+
+
+class CacheMetadata(TypedDict):
+    """TypedDict for cache metadata."""
+    version: str
+    created_at: str
+    updated_at: str
+    plugin_count: int
+    scanner_version: str
+
+
+class CacheData(TypedDict):
+    """TypedDict for complete cache data structure."""
+    metadata: CacheMetadata
+    plugins: Dict[str, SerializedPlugin]
+
+
+# Type guards
+def is_parameter_value(value: Any) -> bool:
+    """Check if a value is a valid ParameterValue."""
+    return isinstance(value, (float, bool, str))
+
+
+def is_serialized_parameter(data: Any) -> bool:
+    """Check if data is a valid SerializedParameter."""
+    return (
+        isinstance(data, dict) and
+        "name" in data and
+        "value" in data and
+        isinstance(data["name"], str) and
+        is_parameter_value(data["value"])
+    )
+
+
+def is_serialized_plugin(data: Any) -> bool:
+    """Check if data is a valid SerializedPlugin."""
+    if not isinstance(data, dict):
+        return False
+    
+    required_fields = ["id", "name", "path", "filename", "plugin_type", "parameters"]
+    for field in required_fields:
+        if field not in data:
+            return False
+    
+    # Check types of required fields
+    if not all(isinstance(data[field], str) for field in ["id", "name", "path", "filename", "plugin_type"]):
+        return False
+    
+    # Check parameters
+    if not isinstance(data["parameters"], dict):
+        return False
+    
+    for param_name, param_data in data["parameters"].items():
+        if not isinstance(param_name, str) or not is_serialized_parameter(param_data):
+            return False
+    
+    # Check optional fields
+    if "manufacturer" in data and data["manufacturer"] is not None:
+        if not isinstance(data["manufacturer"], str):
+            return False
+    
+    if "name_in_file" in data and data["name_in_file"] is not None:
+        if not isinstance(data["name_in_file"], str):
+            return False
+    
+    return True
+</file>
+
 <file path="src/pedalboard_pluginary/utils.py">
 from pathlib import Path
 from typing import Any, Union
@@ -3399,6 +3099,1429 @@ def from_pb_param(data: Any) -> Union[float, bool, str]:
     if drep.lower() == "false":
         return False
     return drep
+</file>
+
+<file path="PLAN.md">
+# Pedalboard Pluginary - Production Readiness Roadmap
+
+## Executive Summary
+
+Based on comprehensive codebase analysis, Pedalboard Pluginary has excellent architectural foundations but requires significant performance and user experience improvements to become production-ready. The current implementation suffers from sequential scanning bottlenecks and lacks modern CLI features, but the protocol-based design makes these improvements straightforward to implement.
+
+## Current State Assessment
+
+### ✅ Completed Strengths
+- **Type-safe architecture** with comprehensive TypedDict and protocol definitions
+- **Modular scanner design** supporting VST3 and AU plugins with extensible BaseScanner
+- **Robust error handling** with custom exception hierarchy and timeout protection
+- **Unified serialization layer** with validation and type safety
+- **Cross-platform support** with OS-specific path handling
+- **Zero mypy errors** in strict mode - excellent type safety foundation
+
+### ❌ Critical Performance Bottlenecks
+- **Sequential scanning** - 1-2 plugins/second (should be 10-20 with async)
+- **Memory inefficiency** - O(n) memory usage, loads entire cache
+- **No concurrency** - Single-threaded design wastes modern hardware
+- **Basic caching** - JSON files don't scale beyond 100s of plugins
+
+### ❌ User Experience Gaps  
+- **Outdated CLI** using Fire framework with poor error handling
+- **No search/filtering** capabilities for large plugin libraries
+- **Limited output formats** - missing tables, rich formatting
+- **No configuration management** system
+
+## Phase 1: Async Performance Revolution (Week 1-2)
+
+### 1.1 Async Scanner Architecture (High Impact)
+
+**Problem**: Sequential plugin scanning is the #1 performance bottleneck.
+
+**Solution**: Implement fully async scanner with configurable concurrency.
+
+```python
+# src/pedalboard_pluginary/async_scanner.py
+import asyncio
+from typing import AsyncIterator, List, Optional
+from .protocols import PluginScanner
+from .models import PluginInfo
+
+class AsyncScannerMixin:
+    """Mixin to add async capabilities to scanners."""
+    
+    async def scan_plugin_async(self, path: Path) -> Optional[PluginInfo]:
+        """Async wrapper for plugin scanning with timeout."""
+        loop = asyncio.get_event_loop()
+        try:
+            # Use asyncio.to_thread for CPU-bound plugin loading
+            return await asyncio.wait_for(
+                asyncio.to_thread(self.scan_plugin, path),
+                timeout=PLUGIN_LOAD_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Plugin {path} timed out during async scan")
+            return None
+    
+    async def scan_plugins_batch(
+        self, 
+        paths: List[Path], 
+        max_concurrent: int = 10,
+        progress_reporter: Optional[ProgressReporter] = None
+    ) -> AsyncIterator[PluginInfo]:
+        """Scan multiple plugins concurrently with backpressure control."""
+        semaphore = asyncio.Semaphore(max_concurrent)
+        
+        async def scan_with_semaphore(path: Path) -> Optional[PluginInfo]:
+            async with semaphore:
+                return await self.scan_plugin_async(path)
+        
+        # Create tasks for all paths
+        tasks = [scan_with_semaphore(path) for path in paths]
+        
+        # Process with progress tracking
+        if progress_reporter:
+            progress_reporter.start(len(tasks), f"Scanning {len(tasks)} plugins")
+        
+        completed = 0
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            completed += 1
+            
+            if progress_reporter:
+                progress_reporter.update(1, f"Completed {completed}/{len(tasks)}")
+            
+            if result:
+                yield result
+        
+        if progress_reporter:
+            progress_reporter.finish("Scan completed")
+
+class AsyncVST3Scanner(VST3Scanner, AsyncScannerMixin):
+    """VST3 scanner with async capabilities."""
+    pass
+
+class AsyncAUScanner(AUScanner, AsyncScannerMixin):  
+    """AU scanner with async capabilities."""
+    pass
+```
+
+**Implementation Steps**:
+1. Create AsyncScannerMixin with concurrent plugin loading
+2. Implement AsyncVST3Scanner and AsyncAUScanner
+3. Add configurable concurrency limits in constants
+4. Update PedalboardScanner to support async mode
+5. Benchmark performance improvements (target: 5-10x speedup)
+
+**Expected Impact**: 
+- **Performance**: 10-20 plugins/second (vs 1-2 current)
+- **Resource Utilization**: Better CPU and I/O usage
+- **User Experience**: Responsive progress reporting
+
+### 1.2 SQLite Cache Backend (Scalability)
+
+**Problem**: JSON file cache doesn't scale beyond 100s of plugins.
+
+**Solution**: Implement SQLite backend with indexing and lazy loading.
+
+```python
+# src/pedalboard_pluginary/cache/sqlite_backend.py
+import sqlite3
+import json
+from typing import Dict, Optional, Iterator, List
+from pathlib import Path
+from ..models import PluginInfo
+from ..protocols import CacheBackend
+
+class SQLiteCacheBackend(CacheBackend):
+    """SQLite-based cache with indexed access and lazy loading."""
+    
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._init_db()
+    
+    def _init_db(self) -> None:
+        """Initialize database schema with indexes."""
+        with self._connect() as conn:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS plugins (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    plugin_type TEXT NOT NULL,
+                    manufacturer TEXT,
+                    data TEXT NOT NULL,
+                    last_modified REAL NOT NULL,
+                    created_at REAL NOT NULL
+                );
+                
+                -- Indexes for fast searching
+                CREATE INDEX IF NOT EXISTS idx_plugins_name ON plugins(name);
+                CREATE INDEX IF NOT EXISTS idx_plugins_type ON plugins(plugin_type);
+                CREATE INDEX IF NOT EXISTS idx_plugins_manufacturer ON plugins(manufacturer);
+                CREATE INDEX IF NOT EXISTS idx_plugins_path ON plugins(path);
+                CREATE INDEX IF NOT EXISTS idx_plugins_modified ON plugins(last_modified);
+                
+                -- Full-text search support
+                CREATE VIRTUAL TABLE IF NOT EXISTS plugins_fts USING fts5(
+                    id, name, manufacturer, content=plugins
+                );
+            """)
+    
+    def get(self, plugin_id: str) -> Optional[PluginInfo]:
+        """Get single plugin without loading entire cache."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT data FROM plugins WHERE id = ?", 
+                (plugin_id,)
+            ).fetchone()
+            
+            if row:
+                data = json.loads(row[0])
+                return PluginSerializer.dict_to_plugin(data)
+            return None
+    
+    def search(
+        self, 
+        query: Optional[str] = None,
+        plugin_type: Optional[str] = None,
+        manufacturer: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0
+    ) -> Iterator[PluginInfo]:
+        """Search plugins with filters and pagination."""
+        conditions = []
+        params = []
+        
+        if query:
+            # Use FTS for text search
+            conditions.append("id IN (SELECT id FROM plugins_fts WHERE plugins_fts MATCH ?)")
+            params.append(query)
+        
+        if plugin_type:
+            conditions.append("plugin_type = ?")
+            params.append(plugin_type)
+        
+        if manufacturer:
+            conditions.append("manufacturer LIKE ?")
+            params.append(f"%{manufacturer}%")
+        
+        where_clause = " AND ".join(conditions) if conditions else "1"
+        
+        sql = f"""
+            SELECT data FROM plugins 
+            WHERE {where_clause}
+            ORDER BY name
+            LIMIT ? OFFSET ?
+        """
+        params.extend([limit, offset])
+        
+        with self._connect() as conn:
+            for row in conn.execute(sql, params):
+                data = json.loads(row[0])
+                plugin = PluginSerializer.dict_to_plugin(data)
+                if plugin:
+                    yield plugin
+    
+    def save(self, plugins: Dict[str, PluginInfo]) -> None:
+        """Save plugins to database with transaction."""
+        with self._connect() as conn:
+            for plugin_id, plugin in plugins.items():
+                data = PluginSerializer.plugin_to_dict(plugin)
+                conn.execute("""
+                    INSERT OR REPLACE INTO plugins 
+                    (id, name, path, plugin_type, manufacturer, data, last_modified, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    plugin_id,
+                    plugin.name,
+                    plugin.path,
+                    plugin.plugin_type,
+                    plugin.manufacturer,
+                    json.dumps(data),
+                    Path(plugin.path).stat().st_mtime,
+                    time.time()
+                ))
+            
+            # Update FTS index
+            conn.execute("INSERT INTO plugins_fts(plugins_fts) VALUES('rebuild')")
+    
+    def update(self, plugin_id: str, plugin: PluginInfo) -> None:
+        """Update single plugin efficiently."""
+        self.save({plugin_id: plugin})
+    
+    def delete(self, plugin_id: str) -> None:
+        """Delete plugin from cache."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM plugins WHERE id = ?", (plugin_id,))
+    
+    def clear(self) -> None:
+        """Clear all plugins from cache."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM plugins")
+    
+    def exists(self) -> bool:
+        """Check if cache exists and has plugins."""
+        if not self.db_path.exists():
+            return False
+        
+        with self._connect() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM plugins").fetchone()[0]
+            return count > 0
+    
+    def get_stats(self) -> Dict[str, int]:
+        """Get cache statistics."""
+        with self._connect() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM plugins").fetchone()[0]
+            
+            type_counts = {}
+            for row in conn.execute("SELECT plugin_type, COUNT(*) FROM plugins GROUP BY plugin_type"):
+                type_counts[row[0]] = row[1]
+            
+            return {
+                "total_plugins": total,
+                "by_type": type_counts
+            }
+    
+    def _connect(self) -> sqlite3.Connection:
+        """Create database connection with optimizations."""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA journal_mode=WAL")  # Better concurrency
+        conn.execute("PRAGMA synchronous=NORMAL")  # Performance vs safety balance
+        conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+        return conn
+```
+
+**Implementation Steps**:
+1. Create cache package with SQLiteCacheBackend
+2. Implement indexed search with full-text capabilities  
+3. Add lazy loading for large datasets
+4. Create migration from JSON to SQLite
+5. Add cache statistics and management commands
+
+**Expected Impact**:
+- **Search Performance**: O(log n) vs O(n) current
+- **Memory Usage**: Constant vs linear current
+- **Scalability**: Handle 10,000+ plugins efficiently
+
+### 1.3 Smart Cache Invalidation
+
+**Problem**: No incremental updates - full rescans required.
+
+**Solution**: File-based change detection with intelligent updates.
+
+```python
+# src/pedalboard_pluginary/cache/change_detection.py
+import time
+from pathlib import Path
+from typing import Dict, List, Set
+from ..models import PluginInfo
+
+class ChangeDetector:
+    """Detects changes in plugin files for incremental updates."""
+    
+    def __init__(self, cache_backend: CacheBackend):
+        self.cache = cache_backend
+        
+    def detect_changes(self, scan_paths: List[Path]) -> Dict[str, List[Path]]:
+        """Detect changed, added, and removed plugins."""
+        current_files = self._discover_plugin_files(scan_paths)
+        cached_plugins = self._get_cached_plugins()
+        
+        # Detect changes by comparing modification times
+        changes = {
+            "added": [],
+            "modified": [],
+            "removed": []
+        }
+        
+        # Check for new and modified files
+        for file_path in current_files:
+            plugin_id = self._path_to_id(file_path)
+            file_mtime = file_path.stat().st_mtime
+            
+            if plugin_id in cached_plugins:
+                cached_mtime = cached_plugins[plugin_id].get("last_modified", 0)
+                if file_mtime > cached_mtime:
+                    changes["modified"].append(file_path)
+            else:
+                changes["added"].append(file_path)
+        
+        # Check for removed files
+        cached_paths = {Path(p["path"]) for p in cached_plugins.values()}
+        current_paths = set(current_files)
+        removed_paths = cached_paths - current_paths
+        changes["removed"].extend(removed_paths)
+        
+        return changes
+    
+    def incremental_scan(
+        self, 
+        scan_paths: List[Path], 
+        scanners: List[PluginScanner],
+        progress_reporter: Optional[ProgressReporter] = None
+    ) -> Dict[str, PluginInfo]:
+        """Perform incremental scan of only changed plugins."""
+        changes = self.detect_changes(scan_paths)
+        total_changes = len(changes["added"]) + len(changes["modified"])
+        
+        if progress_reporter:
+            progress_reporter.start(total_changes, "Incremental scan")
+        
+        updated_plugins = {}
+        
+        # Scan new and modified plugins
+        for file_path in changes["added"] + changes["modified"]:
+            scanner = self._find_scanner_for_path(file_path, scanners)
+            if scanner:
+                plugin_info = scanner.scan_plugin(file_path)
+                if plugin_info:
+                    updated_plugins[plugin_info.id] = plugin_info
+                
+                if progress_reporter:
+                    progress_reporter.update(1)
+        
+        # Remove deleted plugins from cache
+        for removed_path in changes["removed"]:
+            plugin_id = self._path_to_id(removed_path)
+            self.cache.delete(plugin_id)
+        
+        # Update cache with new/modified plugins
+        if updated_plugins:
+            self.cache.save(updated_plugins)
+        
+        if progress_reporter:
+            progress_reporter.finish(f"Updated {len(updated_plugins)} plugins")
+        
+        return updated_plugins
+```
+
+## Phase 2: Modern CLI Revolution (Week 3)
+
+### 2.1 Migrate to Click + Rich
+
+**Problem**: Fire framework is outdated and provides poor user experience.
+
+**Solution**: Modern CLI with Click framework and Rich formatting.
+
+```python
+# src/pedalboard_pluginary/cli.py
+import click
+from rich.console import Console
+from rich.table import Table
+from rich.progress import Progress
+from rich.panel import Panel
+from typing import Optional
+
+console = Console()
+
+@click.group()
+@click.version_option()
+@click.option('--config-file', type=click.Path(), help='Configuration file path')
+@click.option('--verbose', '-v', count=True, help='Increase verbosity')
+def cli(config_file: Optional[str], verbose: int):
+    """Pedalboard Pluginary - Audio plugin scanner and manager.
+    
+    A fast, reliable tool for discovering and managing audio plugins
+    on your system. Supports VST3 and Audio Unit formats.
+    """
+    setup_logging(verbose)
+    if config_file:
+        load_config(config_file)
+
+@cli.command()
+@click.option('--async/--sync', default=True, help='Use async scanning for better performance')
+@click.option('--concurrency', default=10, help='Max concurrent plugin scans (async mode)')
+@click.option('--timeout', default=10.0, help='Plugin load timeout in seconds')
+@click.option('--folders', help='Additional folders to scan (comma-separated)')
+@click.option('--force', is_flag=True, help='Force full rescan (ignore cache)')
+def scan(async_: bool, concurrency: int, timeout: float, folders: Optional[str], force: bool):
+    """Scan system for audio plugins.
+    
+    Discovers VST3 and Audio Unit plugins in standard locations
+    and any additional folders specified. Results are cached for
+    faster subsequent operations.
+    """
+    extra_folders = folders.split(',') if folders else []
+    
+    with console.status("Initializing scanner...") as status:
+        scanner = PedalboardPluginary(
+            async_mode=async_,
+            max_concurrent=concurrency,
+            timeout=timeout
+        )
+        
+        if force:
+            status.update("Clearing cache...")
+            scanner.clear_cache()
+        
+        status.update("Scanning plugins...")
+        
+        # Use Rich progress bar
+        with Progress() as progress:
+            task = progress.add_task("Scanning...", total=None)
+            
+            def progress_callback(current: int, total: int, message: str = ""):
+                progress.update(task, completed=current, total=total, description=message)
+            
+            plugins = scanner.scan(
+                extra_folders=extra_folders,
+                progress_callback=progress_callback
+            )
+    
+    # Display results summary
+    _display_scan_summary(plugins)
+
+@cli.command()
+@click.option('--format', type=click.Choice(['table', 'json', 'yaml', 'csv']), 
+              default='table', help='Output format')
+@click.option('--filter', 'filter_text', help='Filter plugins by name or manufacturer')
+@click.option('--type', 'plugin_type', type=click.Choice(['vst3', 'au']), 
+              help='Filter by plugin type')
+@click.option('--manufacturer', help='Filter by manufacturer')
+@click.option('--limit', default=50, help='Limit number of results')
+def list(format: str, filter_text: Optional[str], plugin_type: Optional[str], 
+         manufacturer: Optional[str], limit: int):
+    """List discovered plugins with filtering options.
+    
+    Display plugins in various formats with powerful filtering
+    capabilities. Use --filter for text search across names
+    and manufacturers.
+    """
+    scanner = PedalboardPluginary()
+    
+    # Apply filters
+    plugins = scanner.search_plugins(
+        query=filter_text,
+        plugin_type=plugin_type,
+        manufacturer=manufacturer,
+        limit=limit
+    )
+    
+    _output_plugins(plugins, format)
+
+@cli.command()
+@click.argument('plugin_id')
+@click.option('--parameters/--no-parameters', default=True, help='Show plugin parameters')
+@click.option('--test', is_flag=True, help='Test plugin loading')
+def info(plugin_id: str, parameters: bool, test: bool):
+    """Show detailed information about a specific plugin.
+    
+    PLUGIN_ID should be the full plugin identifier,
+    e.g., 'vst3/FabFilter Pro-Q 3'
+    """
+    scanner = PedalboardPluginary()
+    plugin = scanner.get_plugin(plugin_id)
+    
+    if not plugin:
+        console.print(f"[red]Plugin '{plugin_id}' not found[/red]")
+        raise click.Abort()
+    
+    _display_plugin_info(plugin, parameters, test)
+
+@cli.command()
+@click.argument('query')
+@click.option('--limit', default=20, help='Limit number of results')
+def search(query: str, limit: int):
+    """Search plugins by name, manufacturer, or type.
+    
+    Performs full-text search across plugin metadata.
+    Supports wildcards and boolean operators.
+    """
+    scanner = PedalboardPluginary()
+    plugins = scanner.search_plugins(query=query, limit=limit)
+    
+    if not plugins:
+        console.print(f"[yellow]No plugins found matching '{query}'[/yellow]")
+        return
+    
+    _output_plugins(plugins, 'table')
+
+@cli.group()
+def cache():
+    """Cache management commands."""
+    pass
+
+@cache.command()
+def clear():
+    """Clear the plugin cache."""
+    scanner = PedalboardPluginary()
+    scanner.clear_cache()
+    console.print("[green]Cache cleared successfully[/green]")
+
+@cache.command()
+def stats():
+    """Show cache statistics."""
+    scanner = PedalboardPluginary()
+    stats = scanner.get_cache_stats()
+    _display_cache_stats(stats)
+
+@cache.command()
+def repair():
+    """Repair corrupted cache."""
+    scanner = PedalboardPluginary()
+    
+    with console.status("Repairing cache..."):
+        repaired = scanner.repair_cache()
+    
+    if repaired:
+        console.print("[green]Cache repaired successfully[/green]")
+    else:
+        console.print("[yellow]No cache corruption detected[/yellow]")
+
+def _display_scan_summary(plugins: Dict[str, PluginInfo]) -> None:
+    """Display scan results summary with Rich formatting."""
+    table = Table(title="Scan Results Summary")
+    table.add_column("Plugin Type", style="cyan")
+    table.add_column("Count", justify="right", style="magenta")
+    
+    type_counts = {}
+    for plugin in plugins.values():
+        type_counts[plugin.plugin_type] = type_counts.get(plugin.plugin_type, 0) + 1
+    
+    for plugin_type, count in sorted(type_counts.items()):
+        table.add_row(plugin_type.upper(), str(count))
+    
+    table.add_row("", "")  # Separator
+    table.add_row("Total", str(len(plugins)), style="bold green")
+    
+    console.print(table)
+
+def _output_plugins(plugins: List[PluginInfo], format: str) -> None:
+    """Output plugins in specified format."""
+    if format == 'table':
+        _output_table(plugins)
+    elif format == 'json':
+        _output_json(plugins)
+    elif format == 'yaml':
+        _output_yaml(plugins)
+    elif format == 'csv':
+        _output_csv(plugins)
+
+def _output_table(plugins: List[PluginInfo]) -> None:
+    """Display plugins in a rich table."""
+    table = Table()
+    table.add_column("Name", style="cyan", no_wrap=True)
+    table.add_column("Type", style="magenta")
+    table.add_column("Manufacturer", style="green")
+    table.add_column("Path", style="blue", overflow="ellipsis")
+    
+    for plugin in plugins:
+        table.add_row(
+            plugin.name,
+            plugin.plugin_type.upper(),
+            plugin.manufacturer or "Unknown",
+            plugin.path
+        )
+    
+    console.print(table)
+
+def _display_plugin_info(plugin: PluginInfo, show_parameters: bool, test_loading: bool) -> None:
+    """Display detailed plugin information."""
+    # Main info panel
+    info_text = f"""
+[bold]Name:[/bold] {plugin.name}
+[bold]Type:[/bold] {plugin.plugin_type.upper()}
+[bold]Manufacturer:[/bold] {plugin.manufacturer or 'Unknown'}
+[bold]Path:[/bold] {plugin.path}
+[bold]Parameters:[/bold] {len(plugin.parameters)}
+    """
+    
+    panel = Panel(info_text.strip(), title=f"Plugin: {plugin.name}", border_style="blue")
+    console.print(panel)
+    
+    # Parameters table
+    if show_parameters and plugin.parameters:
+        param_table = Table(title="Parameters")
+        param_table.add_column("Parameter", style="cyan")
+        param_table.add_column("Value", style="magenta")
+        param_table.add_column("Type", style="green")
+        
+        for param in plugin.parameters.values():
+            param_table.add_row(
+                param.name,
+                str(param.value),
+                type(param.value).__name__
+            )
+        
+        console.print(param_table)
+    
+    # Test loading
+    if test_loading:
+        with console.status("Testing plugin loading..."):
+            try:
+                # Test load the plugin
+                scanner = PedalboardPluginary()
+                success = scanner.test_plugin(plugin.id)
+                
+                if success:
+                    console.print("[green]✓ Plugin loads successfully[/green]")
+                else:
+                    console.print("[red]✗ Plugin failed to load[/red]")
+            except Exception as e:
+                console.print(f"[red]✗ Error testing plugin: {e}[/red]")
+```
+
+**Implementation Steps**:
+1. Replace Fire with Click for command structure
+2. Add Rich for tables, progress bars, and formatting
+3. Implement comprehensive help system
+4. Add plugin search and filtering commands
+5. Create cache management subcommands
+
+**Expected Impact**:
+- **User Experience**: Professional CLI with rich formatting
+- **Discoverability**: Comprehensive help and examples
+- **Functionality**: Search, filtering, and management features
+
+### 2.2 Advanced Search and Filtering
+
+**Problem**: No way to find specific plugins in large libraries.
+
+**Solution**: Full-text search with multiple filter options.
+
+```python
+# src/pedalboard_pluginary/search.py
+import re
+from typing import List, Optional, Dict, Any, Callable
+from .models import PluginInfo
+
+class PluginSearchEngine:
+    """Advanced search engine for plugin discovery."""
+    
+    def __init__(self, cache_backend: CacheBackend):
+        self.cache = cache_backend
+    
+    def search(
+        self,
+        query: Optional[str] = None,
+        plugin_type: Optional[str] = None,
+        manufacturer: Optional[str] = None,
+        has_parameters: Optional[List[str]] = None,
+        parameter_count: Optional[tuple] = None,  # (min, max)
+        sort_by: str = "name",
+        sort_desc: bool = False,
+        limit: int = 100,
+        offset: int = 0
+    ) -> List[PluginInfo]:
+        """Comprehensive plugin search with multiple filters."""
+        
+        # Start with cache backend search for basic filters
+        plugins = list(self.cache.search(
+            query=query,
+            plugin_type=plugin_type,
+            manufacturer=manufacturer,
+            limit=limit * 2,  # Get more for additional filtering
+            offset=offset
+        ))
+        
+        # Apply additional filters
+        if has_parameters:
+            plugins = self._filter_by_parameters(plugins, has_parameters)
+        
+        if parameter_count:
+            min_params, max_params = parameter_count
+            plugins = [p for p in plugins 
+                      if min_params <= len(p.parameters) <= max_params]
+        
+        # Apply sorting
+        plugins = self._sort_plugins(plugins, sort_by, sort_desc)
+        
+        # Apply final limit
+        return plugins[:limit]
+    
+    def fuzzy_search(self, query: str, threshold: float = 0.6) -> List[PluginInfo]:
+        """Fuzzy search using similarity matching."""
+        import difflib
+        
+        all_plugins = list(self.cache.search(limit=10000))
+        matches = []
+        
+        for plugin in all_plugins:
+            # Check similarity against name and manufacturer
+            name_similarity = difflib.SequenceMatcher(
+                None, query.lower(), plugin.name.lower()
+            ).ratio()
+            
+            manufacturer_similarity = 0
+            if plugin.manufacturer:
+                manufacturer_similarity = difflib.SequenceMatcher(
+                    None, query.lower(), plugin.manufacturer.lower()
+                ).ratio()
+            
+            max_similarity = max(name_similarity, manufacturer_similarity)
+            
+            if max_similarity >= threshold:
+                matches.append((plugin, max_similarity))
+        
+        # Sort by similarity score
+        matches.sort(key=lambda x: x[1], reverse=True)
+        return [plugin for plugin, _ in matches]
+    
+    def suggest_similar(self, plugin_id: str, limit: int = 5) -> List[PluginInfo]:
+        """Find plugins similar to the given plugin."""
+        plugin = self.cache.get(plugin_id)
+        if not plugin:
+            return []
+        
+        # Find plugins with similar characteristics
+        similar = []
+        
+        # Same manufacturer
+        if plugin.manufacturer:
+            manufacturer_plugins = list(self.cache.search(
+                manufacturer=plugin.manufacturer,
+                limit=50
+            ))
+            similar.extend([p for p in manufacturer_plugins if p.id != plugin_id])
+        
+        # Similar parameter count
+        param_count = len(plugin.parameters)
+        param_range_plugins = list(self.cache.search(limit=1000))
+        param_similar = [
+            p for p in param_range_plugins
+            if abs(len(p.parameters) - param_count) <= 2 and p.id != plugin_id
+        ]
+        similar.extend(param_similar)
+        
+        # Remove duplicates and limit
+        seen = set()
+        unique_similar = []
+        for p in similar:
+            if p.id not in seen:
+                seen.add(p.id)
+                unique_similar.append(p)
+                if len(unique_similar) >= limit:
+                    break
+        
+        return unique_similar
+    
+    def _filter_by_parameters(
+        self, 
+        plugins: List[PluginInfo], 
+        required_params: List[str]
+    ) -> List[PluginInfo]:
+        """Filter plugins that have specific parameters."""
+        filtered = []
+        
+        for plugin in plugins:
+            plugin_params = {p.name.lower() for p in plugin.parameters.values()}
+            required_lower = {p.lower() for p in required_params}
+            
+            if required_lower.issubset(plugin_params):
+                filtered.append(plugin)
+        
+        return filtered
+    
+    def _sort_plugins(
+        self, 
+        plugins: List[PluginInfo], 
+        sort_by: str, 
+        desc: bool
+    ) -> List[PluginInfo]:
+        """Sort plugins by specified criteria."""
+        sort_functions = {
+            "name": lambda p: p.name.lower(),
+            "manufacturer": lambda p: (p.manufacturer or "").lower(),
+            "type": lambda p: p.plugin_type,
+            "parameters": lambda p: len(p.parameters),
+            "path": lambda p: p.path
+        }
+        
+        if sort_by not in sort_functions:
+            sort_by = "name"
+        
+        return sorted(plugins, key=sort_functions[sort_by], reverse=desc)
+```
+
+## Phase 3: Production Hardening (Week 4)
+
+### 3.1 Comprehensive Testing Strategy
+
+**Problem**: Current test coverage is ~40% with gaps in critical areas.
+
+**Solution**: Achieve 90%+ coverage with focus on reliability.
+
+```python
+# tests/integration/test_full_workflow.py
+import pytest
+import asyncio
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+from pedalboard_pluginary import PedalboardPluginary
+from pedalboard_pluginary.models import PluginInfo
+
+class TestFullWorkflow:
+    """Integration tests for complete scanning workflows."""
+    
+    @pytest.fixture
+    def test_plugins_dir(self, tmp_path):
+        """Create directory with mock plugin files."""
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+        
+        # Create mock VST3 files
+        vst3_dir = plugins_dir / "vst3"
+        vst3_dir.mkdir()
+        (vst3_dir / "TestSynth.vst3").touch()
+        (vst3_dir / "TestEffect.vst3").touch()
+        
+        # Create mock AU files
+        au_dir = plugins_dir / "au"
+        au_dir.mkdir()
+        (au_dir / "TestAU.component").touch()
+        
+        return plugins_dir
+    
+    @pytest.mark.asyncio
+    async def test_async_scanning_performance(self, test_plugins_dir, benchmark):
+        """Test async scanning is faster than sync."""
+        scanner = PedalboardPluginary(async_mode=True, max_concurrent=4)
+        
+        # Mock plugin loading to be fast but measurable
+        with patch('pedalboard.load_plugin') as mock_load:
+            mock_plugin = MagicMock()
+            mock_plugin.name = "Test Plugin"
+            mock_plugin.manufacturer = "Test Company"
+            mock_plugin.parameters = {"gain": 0.5, "freq": 1000.0}
+            mock_load.return_value = mock_plugin
+            
+            async def scan_async():
+                return await scanner.scan_directory_async(test_plugins_dir)
+            
+            result = benchmark(asyncio.run, scan_async)
+            assert len(result) > 0
+    
+    def test_cache_persistence(self, test_plugins_dir, tmp_path):
+        """Test that cache persists between sessions."""
+        cache_dir = tmp_path / "cache"
+        scanner1 = PedalboardPluginary(cache_dir=cache_dir)
+        
+        with patch('pedalboard.load_plugin') as mock_load:
+            mock_plugin = MagicMock()
+            mock_plugin.name = "Persistent Plugin"
+            mock_plugin.parameters = {}
+            mock_load.return_value = mock_plugin
+            
+            # First scan
+            plugins1 = scanner1.scan([test_plugins_dir])
+            assert len(plugins1) > 0
+        
+        # Second scanner instance should load from cache
+        scanner2 = PedalboardPluginary(cache_dir=cache_dir)
+        plugins2 = scanner2.load_plugins()
+        
+        assert len(plugins2) == len(plugins1)
+        assert list(plugins2.keys()) == list(plugins1.keys())
+    
+    def test_incremental_updates(self, test_plugins_dir):
+        """Test incremental cache updates work correctly."""
+        scanner = PedalboardPluginary()
+        
+        with patch('pedalboard.load_plugin') as mock_load:
+            mock_plugin = MagicMock()
+            mock_plugin.name = "Original Plugin"
+            mock_load.return_value = mock_plugin
+            
+            # Initial scan
+            plugins1 = scanner.scan([test_plugins_dir])
+            initial_count = len(plugins1)
+            
+            # Add new plugin file
+            new_plugin = test_plugins_dir / "vst3" / "NewPlugin.vst3"
+            new_plugin.touch()
+            
+            # Update scan should detect new plugin
+            plugins2 = scanner.update_scan([test_plugins_dir])
+            assert len(plugins2) == initial_count + 1
+    
+    def test_error_recovery(self, test_plugins_dir):
+        """Test graceful handling of plugin loading errors."""
+        scanner = PedalboardPluginary()
+        
+        def mock_load_plugin(path):
+            if "TestSynth" in str(path):
+                raise Exception("Plugin corrupted")
+            mock_plugin = MagicMock()
+            mock_plugin.name = "Working Plugin"
+            mock_plugin.parameters = {}
+            return mock_plugin
+        
+        with patch('pedalboard.load_plugin', side_effect=mock_load_plugin):
+            plugins = scanner.scan([test_plugins_dir])
+            
+            # Should have some plugins despite errors
+            assert len(plugins) > 0
+            
+            # Error should be logged but not crash
+            working_plugins = [p for p in plugins.values() 
+                             if p.name == "Working Plugin"]
+            assert len(working_plugins) > 0
+
+# tests/performance/test_benchmarks.py
+import pytest
+import time
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+class TestPerformanceBenchmarks:
+    """Performance regression tests."""
+    
+    def test_scan_performance_regression(self, benchmark):
+        """Ensure scan performance doesn't regress."""
+        # Create mock plugins that take realistic time to load
+        def slow_load_plugin(path):
+            time.sleep(0.01)  # 10ms per plugin
+            mock_plugin = MagicMock()
+            mock_plugin.name = f"Plugin {Path(path).stem}"
+            mock_plugin.parameters = {"param1": 0.5}
+            return mock_plugin
+        
+        scanner = PedalboardPluginary()
+        mock_paths = [Path(f"/fake/plugin{i}.vst3") for i in range(10)]
+        
+        with patch('pedalboard.load_plugin', side_effect=slow_load_plugin), \
+             patch.object(scanner, 'find_plugin_files', return_value=mock_paths):
+            
+            result = benchmark(scanner.scan, [])
+            assert len(result) == 10
+            
+            # Should complete 10 plugins in under 1 second with async
+            # (much faster than 10 * 0.01 = 0.1s sequential minimum)
+    
+    def test_memory_usage_scaling(self):
+        """Test memory usage scales properly with plugin count."""
+        import psutil
+        import os
+        
+        process = psutil.Process(os.getpid())
+        
+        # Measure baseline memory
+        baseline_memory = process.memory_info().rss
+        
+        # Create scanner with large mock dataset
+        scanner = PedalboardPluginary()
+        
+        # Create 1000 mock plugins
+        large_dataset = {}
+        for i in range(1000):
+            plugin = PluginInfo(
+                id=f"plugin_{i}",
+                name=f"Plugin {i}",
+                path=f"/fake/plugin{i}.vst3",
+                filename=f"plugin{i}.vst3",
+                plugin_type="vst3",
+                parameters={}
+            )
+            large_dataset[plugin.id] = plugin
+        
+        scanner.plugins = large_dataset
+        
+        # Memory should not grow excessively
+        current_memory = process.memory_info().rss
+        memory_growth = current_memory - baseline_memory
+        
+        # Should use less than 50MB for 1000 plugins
+        assert memory_growth < 50 * 1024 * 1024
+
+# tests/reliability/test_error_scenarios.py
+class TestErrorScenarios:
+    """Test error handling and recovery scenarios."""
+    
+    def test_corrupted_cache_recovery(self, tmp_path):
+        """Test recovery from corrupted cache file."""
+        cache_file = tmp_path / "plugins.json"
+        cache_file.write_text("invalid json content")
+        
+        scanner = PedalboardPluginary(cache_dir=tmp_path)
+        
+        # Should handle corrupted cache gracefully
+        plugins = scanner.load_plugins()
+        assert isinstance(plugins, dict)
+        assert len(plugins) == 0
+    
+    def test_permission_denied_handling(self, tmp_path):
+        """Test handling of permission denied errors."""
+        restricted_dir = tmp_path / "restricted"
+        restricted_dir.mkdir(mode=0o000)  # No permissions
+        
+        scanner = PedalboardPluginary()
+        
+        try:
+            # Should not crash on permission errors
+            plugins = scanner.scan([restricted_dir])
+            assert isinstance(plugins, dict)
+        finally:
+            restricted_dir.chmod(0o755)  # Restore permissions for cleanup
+    
+    def test_network_drive_timeouts(self):
+        """Test handling of slow network drives."""
+        # Mock slow file system operations
+        def slow_stat():
+            time.sleep(2)  # Simulate slow network
+            raise OSError("Network timeout")
+        
+        scanner = PedalboardPluginary(timeout=1.0)
+        
+        with patch.object(Path, 'stat', side_effect=slow_stat):
+            # Should timeout gracefully
+            plugins = scanner.scan([Path("/fake/network/path")])
+            assert isinstance(plugins, dict)
+```
+
+**Implementation Steps**:
+1. Create comprehensive integration test suite
+2. Add performance benchmarks and regression tests
+3. Test error scenarios and edge cases
+4. Add cross-platform compatibility tests
+5. Implement continuous integration with multiple Python versions
+
+**Expected Impact**:
+- **Reliability**: Catch regressions before deployment
+- **Performance**: Prevent performance degradation
+- **Confidence**: Thorough testing enables rapid development
+
+### 3.2 Error Recovery and Resilience
+
+**Problem**: Limited error recovery capabilities.
+
+**Solution**: Comprehensive error handling with automatic recovery.
+
+```python
+# src/pedalboard_pluginary/resilience.py
+import logging
+import time
+from typing import Dict, List, Optional, Callable, Any
+from pathlib import Path
+
+class ResilienceManager:
+    """Manages error recovery and system resilience."""
+    
+    def __init__(self, config: 'Settings'):
+        self.config = config
+        self.error_counts: Dict[str, int] = {}
+        self.blacklisted_plugins: Set[str] = set()
+        self.logger = logging.getLogger(__name__)
+    
+    def safe_plugin_scan(
+        self, 
+        scanner: PluginScanner, 
+        plugin_path: Path,
+        max_retries: int = 3
+    ) -> Optional[PluginInfo]:
+        """Safely scan a plugin with error recovery."""
+        plugin_key = str(plugin_path)
+        
+        # Check if plugin is blacklisted
+        if plugin_key in self.blacklisted_plugins:
+            self.logger.debug(f"Skipping blacklisted plugin: {plugin_path}")
+            return None
+        
+        for attempt in range(max_retries):
+            try:
+                return scanner.scan_plugin(plugin_path)
+                
+            except TimeoutError as e:
+                self.logger.warning(f"Plugin {plugin_path} timed out (attempt {attempt + 1})")
+                self._record_error(plugin_key, "timeout")
+                
+                if attempt == max_retries - 1:
+                    self._maybe_blacklist_plugin(plugin_key)
+                    
+            except PluginLoadError as e:
+                self.logger.error(f"Plugin {plugin_path} failed to load: {e}")
+                self._record_error(plugin_key, "load_error")
+                
+                # Don't retry load errors - they're likely permanent
+                self._maybe_blacklist_plugin(plugin_key)
+                break
+                
+            except Exception as e:
+                self.logger.error(f"Unexpected error scanning {plugin_path}: {e}")
+                self._record_error(plugin_key, "unexpected")
+                
+                if attempt == max_retries - 1:
+                    self._maybe_blacklist_plugin(plugin_key)
+        
+        return None
+    
+    def safe_cache_operation(
+        self, 
+        operation: Callable[[], Any], 
+        operation_name: str,
+        fallback: Optional[Callable[[], Any]] = None
+    ) -> Any:
+        """Safely perform cache operation with fallback."""
+        try:
+            return operation()
+            
+        except (IOError, OSError) as e:
+            self.logger.error(f"Cache {operation_name} failed: {e}")
+            
+            if fallback:
+                self.logger.info(f"Attempting {operation_name} fallback")
+                try:
+                    return fallback()
+                except Exception as fallback_error:
+                    self.logger.error(f"Fallback also failed: {fallback_error}")
+            
+            # Return safe default
+            return {} if "load" in operation_name else None
+            
+        except Exception as e:
+            self.logger.error(f"Unexpected error in cache {operation_name}: {e}")
+            return {} if "load" in operation_name else None
+    
+    def repair_cache(self, cache_backend: CacheBackend) -> bool:
+        """Attempt to repair corrupted cache."""
+        try:
+            # Test basic cache operations
+            cache_backend.exists()
+            test_plugins = list(cache_backend.search(limit=1))
+            
+            self.logger.info("Cache appears healthy")
+            return False
+            
+        except Exception as e:
+            self.logger.warning(f"Cache corruption detected: {e}")
+            
+            try:
+                # Attempt repair by clearing and rebuilding
+                self.logger.info("Attempting cache repair...")
+                cache_backend.clear()
+                
+                # Cache will be rebuilt on next scan
+                self.logger.info("Cache cleared for rebuild")
+                return True
+                
+            except Exception as repair_error:
+                self.logger.error(f"Cache repair failed: {repair_error}")
+                return False
+    
+    def get_health_status(self) -> Dict[str, Any]:
+        """Get system health status."""
+        total_errors = sum(self.error_counts.values())
+        
+        return {
+            "total_errors": total_errors,
+            "blacklisted_plugins": len(self.blacklisted_plugins),
+            "error_breakdown": dict(self.error_counts),
+            "health_score": self._calculate_health_score()
+        }
+    
+    def _record_error(self, plugin_key: str, error_type: str) -> None:
+        """Record error for tracking."""
+        error_key = f"{plugin_key}:{error_type}"
+        self.error_counts[error_key] = self.error_counts.get(error_key, 0) + 1
+    
+    def _maybe_blacklist_plugin(self, plugin_key: str) -> None:
+        """Blacklist plugin if it has too many errors."""
+        plugin_errors = sum(
+            count for key, count in self.error_counts.items()
+            if key.startswith(plugin_key)
+        )
+        
+        if plugin_errors >= self.config.max_plugin_errors:
+            self.blacklisted_plugins.add(plugin_key)
+            self.logger.warning(f"Blacklisted problematic plugin: {plugin_key}")
+    
+    def _calculate_health_score(self) -> float:
+        """Calculate system health score (0-100)."""
+        total_errors = sum(self.error_counts.values())
+        blacklisted_count = len(self.blacklisted_plugins)
+        
+        # Simple scoring algorithm
+        error_penalty = min(total_errors * 2, 50)  # Max 50 point penalty
+        blacklist_penalty = min(blacklisted_count * 5, 30)  # Max 30 point penalty
+        
+        return max(0, 100 - error_penalty - blacklist_penalty)
+```
+
+## Phase 4: Advanced Features (Week 5-6)
+
+### 4.1 Configuration Management System
+
+**Problem**: No user configuration system.
+
+**Solution**: Pydantic-based settings with environment variable support.
+
+```python
+# src/pedalboard_pluginary/config.py
+from pydantic import BaseSettings, validator
+from typing import List, Optional
+from pathlib import Path
+
+class Settings(BaseSettings):
+    """Application configuration with environment variable support."""
+    
+    # Performance settings
+    async_mode: bool = True
+    max_concurrent_scans: int = 10
+    plugin_load_timeout: float = 10.0
+    
+    # Cache settings
+    cache_backend: str = "sqlite"  # "json" or "sqlite"
+    cache_directory: Optional[Path] = None
+    max_cache_size_mb: int = 100
+    
+    # Scanning settings
+    scan_default_locations: bool = True
+    extra_scan_paths: List[str] = []
+    ignore_patterns: List[str] = []
+    
+    # Error handling
+    max_plugin_errors: int = 3
+    enable_error_recovery: bool = True
+    
+    # Output settings
+    default_output_format: str = "table"
+    enable_colors: bool = True
+    
+    class Config:
+        env_prefix = "PLUGINARY_"
+        env_file = ".env"
+        case_sensitive = False
+    
+    @validator('cache_directory')
+    def validate_cache_directory(cls, v):
+        if v is None:
+            return Path.home() / ".cache" / "pedalboard-pluginary"
+        return Path(v)
+    
+    @validator('max_concurrent_scans')
+    def validate_concurrency(cls, v):
+        if v < 1:
+            raise ValueError("max_concurrent_scans must be at least 1")
+        if v > 50:
+            raise ValueError("max_concurrent_scans should not exceed 50")
+        return v
+```
+
+### 4.2 Plugin Categorization System
+
+**Problem**: No way to organize plugins by function.
+
+**Solution**: Intelligent categorization based on names and parameters.
+
+```python
+# src/pedalboard_pluginary/categorizer.py
+from enum import Enum
+from typing import List, Set, Dict
+import re
+
+class PluginCategory(Enum):
+    EQUALIZER = "equalizer"
+    COMPRESSOR = "compressor"
+    REVERB = "reverb"
+    DELAY = "delay"
+    MODULATION = "modulation"
+    DISTORTION = "distortion"
+    SYNTHESIZER = "synthesizer"
+    UTILITY = "utility"
+    UNKNOWN = "unknown"
+
+class PluginCategorizer:
+    """Automatically categorize plugins based on name and parameters."""
+    
+    CATEGORY_RULES = {
+        PluginCategory.EQUALIZER: {
+            "name_keywords": ["eq", "equalizer", "filter", "shelf", "bell"],
+            "parameter_keywords": ["frequency", "freq", "gain", "q", "bandwidth"],
+            "parameter_patterns": [r".*freq.*", r".*hz.*", r".*khz.*"]
+        },
+        PluginCategory.COMPRESSOR: {
+            "name_keywords": ["comp", "compressor", "limiter", "gate"],
+            "parameter_keywords": ["threshold", "ratio", "attack", "release", "knee"],
+            "parameter_patterns": [r".*thresh.*", r".*ratio.*"]
+        },
+        PluginCategory.REVERB: {
+            "name_keywords": ["reverb", "verb", "hall", "room", "plate", "spring"],
+            "parameter_keywords": ["decay", "size", "damping", "predelay"],
+            "parameter_patterns": [r".*room.*", r".*hall.*", r".*decay.*"]
+        },
+        PluginCategory.DELAY: {
+            "name_keywords": ["delay", "echo", "ping", "pong"],
+            "parameter_keywords": ["delay", "feedback", "time", "sync"],
+            "parameter_patterns": [r".*delay.*", r".*time.*", r".*sync.*"]
+        },
+        PluginCategory.MODULATION: {
+            "name_keywords": ["chorus", "flanger", "phaser", "tremolo", "vibrato", "mod"],
+            "parameter_keywords": ["rate", "depth", "lfo", "speed"],
+            "parameter_patterns": [r".*rate.*", r".*depth.*", r".*lfo.*"]
+        },
+        PluginCategory.DISTORTION: {
+            "name_keywords": ["dist", "overdrive", "fuzz", "saturator", "drive"],
+            "parameter_keywords": ["drive", "gain", "distortion", "saturation"],
+            "parameter_patterns": [r".*drive.*", r".*dist.*", r".*sat.*"]
+        },
+        PluginCategory.SYNTHESIZER: {
+            "name_keywords": ["synth", "osc", "generator", "bass", "lead", "pad"],
+            "parameter_keywords": ["oscillator", "envelope", "filter", "cutoff"],
+            "parameter_patterns": [r".*osc.*", r".*env.*", r".*adsr.*"]
+        }
+    }
+    
+    def categorize(self, plugin: PluginInfo) -> List[PluginCategory]:
+        """Categorize a plugin based on its characteristics."""
+        categories = []
+        
+        for category, rules in self.CATEGORY_RULES.items():
+            if self._matches_category(plugin, rules):
+                categories.append(category)
+        
+        return categories if categories else [PluginCategory.UNKNOWN]
+    
+    def _matches_category(self, plugin: PluginInfo, rules: Dict) -> bool:
+        """Check if plugin matches category rules."""
+        score = 0
+        
+        # Check name keywords
+        name_lower = plugin.name.lower()
+        name_matches = sum(1 for keyword in rules["name_keywords"] 
+                          if keyword in name_lower)
+        score += name_matches * 3  # Name matches are weighted highly
+        
+        # Check parameter keywords and patterns
+        param_names = [p.name.lower() for p in plugin.parameters.values()]
+        
+        param_keyword_matches = 0
+        for param_name in param_names:
+            for keyword in rules["parameter_keywords"]:
+                if keyword in param_name:
+                    param_keyword_matches += 1
+        
+        param_pattern_matches = 0
+        for param_name in param_names:
+            for pattern in rules["parameter_patterns"]:
+                if re.search(pattern, param_name):
+                    param_pattern_matches += 1
+        
+        score += param_keyword_matches * 2
+        score += param_pattern_matches * 1
+        
+        # Threshold for categorization
+        return score >= 2
+```
+
+## Implementation Priorities
+
+### Immediate Next Steps (Week 1)
+1. **Async Scanner Implementation** - Highest impact performance improvement
+2. **SQLite Cache Backend** - Essential for scalability
+3. **Click CLI Migration** - Better user experience
+
+### Quality Gates
+- **Phase 1**: Async scanning 5x faster than sync, zero mypy errors
+- **Phase 2**: Modern CLI with rich output, search functionality working  
+- **Phase 3**: 90%+ test coverage, comprehensive error handling
+- **Phase 4**: Production-ready with advanced features
+
+### Success Metrics
+- **Performance**: 10-20 plugins/second scan speed
+- **Scalability**: Handle 10,000+ plugins efficiently
+- **Reliability**: Graceful error handling and recovery
+- **Usability**: Intuitive CLI with comprehensive help
+
+The codebase has excellent foundations. These improvements will transform it into a production-ready, high-performance tool that can handle large plugin libraries efficiently while providing an excellent user experience.
 </file>
 
 <file path="src/pedalboard_pluginary/core.py">
@@ -3666,6 +4789,7 @@ from typing import Dict, List, Optional
 
 import pedalboard
 
+from ..async_scanner import AsyncScannerMixin
 from ..base_scanner import BaseScanner
 from ..constants import PLUGIN_TYPE_VST3, VST3_EXTENSION, PLUGIN_LOAD_TIMEOUT
 from ..exceptions import PluginLoadError, PluginScanError
@@ -3676,7 +4800,7 @@ from ..utils import from_pb_param
 logger = logging.getLogger(__name__)
 
 
-class VST3Scanner(BaseScanner):
+class VST3Scanner(BaseScanner, AsyncScannerMixin):
     """Scanner for VST3 plugins."""
     
     @property
@@ -3928,6 +5052,296 @@ if __name__ == "__main__":
     main()
 </file>
 
+<file path="src/pedalboard_pluginary/scanner.py">
+import asyncio
+import json
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union, cast
+
+from .scanners.au_scanner import AUScanner
+from .scanners.vst3_scanner import VST3Scanner
+from .async_scanner import AsyncScannerMixin
+
+import pedalboard
+
+from .constants import DEFAULT_MAX_CONCURRENT
+from .data import (
+    copy_default_ignores,
+    get_cache_path,
+    load_ignores,
+    save_json_file,
+)
+from .exceptions import CacheCorruptedError, PluginScanError
+from .models import PluginInfo, PluginParameter
+from .progress import TqdmProgress
+from .protocols import ProgressReporter
+from .serialization import PluginSerializer
+from .utils import ensure_folder, from_pb_param
+
+logger: logging.Logger = logging.getLogger(__name__)
+
+
+class PedalboardScanner:
+    """Main scanner class that coordinates scanning of all plugin types."""
+
+    def __init__(
+        self,
+        ignore_paths: Optional[List[str]] = None,
+        specific_paths: Optional[List[str]] = None,
+        progress_reporter: Optional[ProgressReporter] = None,
+        async_mode: bool = False,
+        max_concurrent: int = DEFAULT_MAX_CONCURRENT,
+    ):
+        """Initialize the scanner with optional ignore paths and specific paths.
+        
+        Args:
+            ignore_paths: List of regex patterns for paths to ignore.
+            specific_paths: List of specific paths to scan.
+            progress_reporter: Optional progress reporter instance.
+            async_mode: Whether to use async scanning for better performance.
+            max_concurrent: Maximum number of concurrent scans (async mode only).
+        """
+        self.ignore_paths = ignore_paths or []
+        self.specific_paths = specific_paths or []
+        self.plugins: Dict[str, PluginInfo] = {}
+        self.plugins_path = get_cache_path("plugins")
+        self.ignores_path = get_cache_path("ignores")
+        self.progress_reporter = progress_reporter or TqdmProgress()
+        self.async_mode = async_mode
+        self.max_concurrent = max_concurrent
+        
+        # Initialize ignores
+        copy_default_ignores(self.ignores_path)
+        self.ignores = load_ignores(self.ignores_path)
+        
+        # Initialize scanners
+        self.scanners = [
+            AUScanner(
+                ignore_paths=self.ignore_paths, specific_paths=self.specific_paths
+            ),
+            VST3Scanner(
+                ignore_paths=self.ignore_paths, specific_paths=self.specific_paths
+            ),
+        ]
+        
+        # Load existing plugin data if available
+        self.load_data()
+
+    def load_data(self) -> None:
+        """Load existing plugin data from cache."""
+        try:
+            self.plugins = PluginSerializer.load_plugins(self.plugins_path)
+        except CacheCorruptedError as e:
+            logger.warning(f"Cache corrupted, will perform full scan: {e}")
+            self.plugins = {}
+
+    def save_data(self) -> None:
+        """Save plugin data to cache."""
+        PluginSerializer.save_plugins(self.plugins, self.plugins_path)
+        
+        # Save updated ignores
+        save_json_file(list(self.ignores), self.ignores_path)
+
+    def full_scan(self) -> Dict[str, PluginInfo]:
+        """Perform a full scan of all plugin types."""
+        self.plugins = {}
+        total_files = 0
+        
+        # First, count all plugin files
+        all_plugin_files = []
+        for scanner in self.scanners:
+            plugin_files = scanner.find_plugin_files()
+            all_plugin_files.extend([(scanner, pf) for pf in plugin_files])
+            total_files += len(plugin_files)
+        
+        # Scan all plugins with progress reporting
+        self.progress_reporter.start(total_files, "Scanning plugins")
+        
+        for scanner, plugin_file in all_plugin_files:
+            plugin_key = f"{scanner.__class__.__name__.replace('Scanner', '').lower()}:{plugin_file}"
+            
+            # Skip ignored plugins
+            if plugin_key in self.ignores:
+                logger.info(f"Skipping ignored plugin: {plugin_file}")
+                self.progress_reporter.update(1, f"Skipped: {plugin_file.name}")
+                continue
+            
+            try:
+                plugin_info = scanner.scan_plugin(plugin_file)
+                if plugin_info:
+                    self.plugins[plugin_info.id] = plugin_info
+                    logger.info(f"Scanned plugin: {plugin_file}")
+                    self.progress_reporter.update(1, f"Scanned: {plugin_info.name}")
+                else:
+                    self.progress_reporter.update(1)
+            except PluginScanError as e:
+                logger.error(f"Failed to scan plugin {plugin_file}: {e}")
+                self.ignores.add(plugin_key)
+                self.progress_reporter.update(1, f"Failed: {plugin_file.name}")
+            except Exception as e:
+                logger.error(f"Unexpected error scanning {plugin_file}: {e}")
+                self.ignores.add(plugin_key)
+                self.progress_reporter.update(1, f"Error: {plugin_file.name}")
+        
+        self.progress_reporter.finish(f"Scanned {len(self.plugins)} plugins")
+        
+        # Save the results
+        self.save_data()
+        return self.plugins
+
+    def update_scan(self) -> Dict[str, PluginInfo]:
+        """Update the scan with new plugins while preserving existing data."""
+        # Keep track of existing plugins
+        existing_plugins = set(self.plugins.keys())
+        new_plugins = {}
+        
+        # Find all plugin files
+        all_plugin_files = []
+        for scanner in self.scanners:
+            plugin_files = scanner.find_plugin_files()
+            all_plugin_files.extend([(scanner, pf) for pf in plugin_files])
+        
+        # Only scan plugins that aren't already in the cache
+        plugins_to_scan = []
+        for scanner, plugin_file in all_plugin_files:
+            plugin_type = scanner.__class__.__name__.replace('Scanner', '').lower()
+            plugin_key = f"{plugin_type}:{plugin_file}"
+            
+            if plugin_key not in existing_plugins and plugin_key not in self.ignores:
+                plugins_to_scan.append((scanner, plugin_file, plugin_key))
+        
+        # Scan new plugins with progress reporting
+        if plugins_to_scan:
+            self.progress_reporter.start(len(plugins_to_scan), "Scanning new plugins")
+            
+            for scanner, plugin_file, plugin_key in plugins_to_scan:
+                try:
+                    plugin_info = scanner.scan_plugin(plugin_file)
+                    if plugin_info:
+                        self.plugins[plugin_info.id] = plugin_info
+                        new_plugins[plugin_info.id] = plugin_info
+                        logger.info(f"Scanned new plugin: {plugin_file}")
+                        self.progress_reporter.update(1, f"Scanned: {plugin_info.name}")
+                    else:
+                        self.progress_reporter.update(1)
+                except PluginScanError as e:
+                    logger.error(f"Failed to scan plugin {plugin_file}: {e}")
+                    self.ignores.add(plugin_key)
+                    self.progress_reporter.update(1, f"Failed: {plugin_file.name}")
+                except Exception as e:
+                    logger.error(f"Unexpected error scanning {plugin_file}: {e}")
+                    self.ignores.add(plugin_key)
+                    self.progress_reporter.update(1, f"Error: {plugin_file.name}")
+            
+            self.progress_reporter.finish(f"Found {len(new_plugins)} new plugins")
+            
+            # Save updated data
+            self.save_data()
+        
+        return new_plugins
+
+    async def full_scan_async(self) -> Dict[str, PluginInfo]:
+        """Perform a full async scan of all plugin types."""
+        if not self.async_mode:
+            raise ValueError("Async mode not enabled. Set async_mode=True during initialization.")
+        
+        self.plugins = {}
+        
+        # Collect all plugin files from all scanners
+        all_plugin_files = []
+        for scanner in self.scanners:
+            plugin_files = scanner.find_plugin_files()
+            all_plugin_files.extend(plugin_files)
+        
+        # Filter out ignored plugins
+        files_to_scan = []
+        for plugin_file in all_plugin_files:
+            # Find the appropriate scanner for this file
+            found_scanner = self._find_scanner_for_file(plugin_file)
+            if found_scanner:
+                plugin_key = f"{found_scanner.__class__.__name__.replace('Scanner', '').lower()}:{plugin_file}"
+                if plugin_key not in self.ignores:
+                    files_to_scan.append(plugin_file)
+        
+        # Scan plugins asynchronously
+        if files_to_scan:
+            # Use the first scanner that supports async (they all do now)
+            async_scanner = cast(AsyncScannerMixin, self.scanners[0])  # VST3Scanner and AUScanner both have AsyncScannerMixin
+            
+            scanned_plugins = []
+            async for plugin in async_scanner.scan_plugins_batch(
+                files_to_scan, 
+                max_concurrent=self.max_concurrent,
+                progress_reporter=self.progress_reporter
+            ):
+                scanned_plugins.append(plugin)
+                self.plugins[plugin.id] = plugin
+        
+        # Save the results
+        self.save_data()
+        return self.plugins
+    
+    async def update_scan_async(self) -> Dict[str, PluginInfo]:
+        """Update the scan asynchronously with new plugins while preserving existing data."""
+        if not self.async_mode:
+            raise ValueError("Async mode not enabled. Set async_mode=True during initialization.")
+        
+        # Keep track of existing plugins
+        existing_plugins = set(self.plugins.keys())
+        new_plugins = {}
+        
+        # Find all plugin files
+        all_plugin_files = []
+        for scanner in self.scanners:
+            plugin_files = scanner.find_plugin_files()
+            all_plugin_files.extend(plugin_files)
+        
+        # Only scan plugins that aren't already in the cache
+        files_to_scan = []
+        for plugin_file in all_plugin_files:
+            found_scanner = self._find_scanner_for_file(plugin_file)
+            if found_scanner:
+                plugin_type = found_scanner.__class__.__name__.replace('Scanner', '').lower()
+                plugin_key = f"{plugin_type}:{plugin_file}"
+                
+                if plugin_key not in existing_plugins and plugin_key not in self.ignores:
+                    files_to_scan.append(plugin_file)
+        
+        # Scan new plugins asynchronously
+        if files_to_scan:
+            async_scanner = cast(AsyncScannerMixin, self.scanners[0])
+            
+            async for plugin in async_scanner.scan_plugins_batch(
+                files_to_scan,
+                max_concurrent=self.max_concurrent,
+                progress_reporter=self.progress_reporter
+            ):
+                self.plugins[plugin.id] = plugin
+                new_plugins[plugin.id] = plugin
+            
+            # Save updated data
+            self.save_data()
+        
+        return new_plugins
+    
+    def _find_scanner_for_file(self, plugin_file: Path) -> Optional[Union[AUScanner, VST3Scanner]]:
+        """Find the appropriate scanner for a given plugin file."""
+        for scanner in self.scanners:
+            if scanner.validate_plugin_path(plugin_file):
+                return scanner  # type: ignore[return-value]
+        return None
+
+    def get_json(self) -> str:
+        """Return the plugins data as a JSON string."""
+        # Use the serializer to convert plugins to dict format
+        plugins_dict = {}
+        for key, plugin_info in self.plugins.items():
+            plugins_dict[key] = PluginSerializer.plugin_to_dict(plugin_info)
+        
+        return json.dumps(plugins_dict, indent=2)
+</file>
+
 <file path="CHANGELOG.md">
 # Changelog
 
@@ -4001,6 +5415,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed remaining type safety issues in base_scanner.py and __main__.py
 - Achieved 100% mypy compliance in strict mode with zero errors
 - Completed Phase 1: Critical Fixes and Type Safety implementation
+- Implemented AsyncScannerMixin for concurrent plugin loading
+- Added async support to VST3Scanner and AUScanner classes
+- Created async scanning methods in PedalboardScanner (full_scan_async, update_scan_async)
+- Added configurable concurrency limits for async operations
+- Maintained zero mypy errors while adding async functionality
 
 ## [1.1.0] - Previous Release
 
@@ -4022,218 +5441,235 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Blacklist functionality for problematic plugins
 </file>
 
+<file path="README.md">
+# Pedalboard Pluginary
+
+[![Codecov](https://codecov.io/gh/twardoch/pedalboard-pluginary/branch/main/graph/badge.svg?token=YOUR_CODECOV_TOKEN_HERE)](https://codecov.io/gh/twardoch/pedalboard-pluginary)
+<!-- Replace YOUR_CODECOV_TOKEN_HERE with the actual token from Codecov if needed, or remove the token part if your repo is public and Codecov supports tokenless uploads for it.
+The URL should also be verified once the repo is active on Codecov. -->
+
+_Pedalboard Pluginary_ is an independent Python-based package and command-line tool that scans and lists VST-3 plugins on macOS and Windows, and Audio Unit (AU) plugins on macOS. It’s intended as a companion for the _[Pedalboard](https://github.com/spotify/pedalboard)_ Python library by Spotify, but it’s not affiliated with _Pedalboard_ or Spotify.
+
+## Features
+
+With _Pedalboard Pluginary_, you can scan and list VST-3 and AU audio plugins installed on your machine, including their default parameters. 
+
+- It automatically scans and catalogs VST-3 and AU plugins installed on your system.
+- Provides a command-line interface (CLI) for quick access to your plugin library.
+- Saves the plugin information in a JSON file. This file has the information about the plugin parameters and their default values. 
+- Works on Windows and macOS (Windows is currently untested).
+- It bundles an `ignores.json` file, which “blacklists” some plugins that are known to cause issues with Pedalboard. It will not scan these, and will not include them in the cache. If you find that some plugins are not working with Pedalboard, you can add them to your `ignores.json` file. See “Contributing” section below.
+
+## Future plans
+
+I plan to extend the package with another functionality, “jobs”, which will allow to load a stack of plugins with their parameter values from a dictionary or JSON file, and run them in a batch using Pedalboard. 
+
+## Installation
+
+To install _Pedalboard Pluginary_, run:
+
+```bash
+python3 -m pip install --upgrade pedalboard-pluginary
+```
+
+For the current development version:
+
+```bash
+python3 -m pip install --upgrade git+https://github.com/twardoch/pedalboard-pluginary
+```
+
+## Command-line usage
+
+After installation, you can use `pbpluginary` from the command line.
+
+### Commands:
+
+- `pbpluginary list` displays the plugin information stored in the cache, as a JSON. If no cache exists, it will scan your system and create the cache.
+- `pbpluginary scan` scans all available plugins, and caches the information. Run this if you’ve installed or upgraded some VST-3 or AU plugins.
+
+## Python usage
+
+You can use _Pedalboard Pluginary_ as a library in your Python scripts. Here's a quick example:
+
+```python
+from pedalboard_pluginary import PedalboardPluginary
+
+pluginary = PedalboardPluginary()
+print(pluginary.list_plugins())
+```
+
+This snippet will list all plugins that have been scanned and cached, as a JSON.
+
+## Changes
+
+- **v1.1.0**: Added `update` CLI command which only scans plugins that aren’t cached yet. Not perfect. Added `json` and `yaml` CLI commands. Additional refactorings. 
+- **v1.0.0**: Initial release with basic scanning and listing of both VST-3 and AU plugins, and command-line interface for easy interaction.
+
+## License
+
+- **Pedalboard Pluginary** is written by Adam Twardoch, with assistance from GPT-4.
+- Copyright (c) 2023 Adam Twardoch.
+- Licensed under the [Apache-2.0 license](https://raw.githubusercontent.com/twardoch/pedalboard-pluginary/main/LICENSE.txt).
+- _Pedalboard Pluginary_ is not affiliated with [Pedalboard](https://github.com/spotify/pedalboard) or Spotify.
+
+## Contributing
+
+- If you encounter any issues or have suggestions, feel free to open an [issue](https://github.com/twardoch/pedalboard-pluginary/issues) on GitHub. 
+- If you find that some plugins are not working with Pedalboard, open an issue that lists the key, which is the plugin type and the base filename, like `"aufx/CoreAudio"` or `"vst3/RX 10 Connect"`. You can also modify the [`default_ignores.json`](https://raw.githubusercontent.com/twardoch/pedalboard-pluginary/main/src/pedalboard_pluginary/resources/default_ignores.json) file, and submit a pull request.
+- If you want to contribute code, please open a pull request.
+</file>
+
 <file path="TODO.md">
-# Pedalboard Pluginary - Production Readiness TODO
+# Pedalboard Pluginary - Implementation Roadmap
 
-## Phase 1: Critical Fixes and Type Safety
-
-### Pedalboard Type Stubs
-- [ ] Create pedalboard-stubs directory structure
-- [ ] Define Plugin, AudioUnitPlugin, VST3Plugin interfaces
-- [ ] Add load_plugin function signature
-- [ ] Configure mypy to use stubs
-- [ ] Remove all type: ignore comments
-
-### Timeout Handling
-- [ ] Create timeout.py module
-- [ ] Implement sync_timeout function with ThreadPoolExecutor
-- [ ] Implement async with_timeout function
-- [ ] Add timeout support to all plugin loading operations
-- [ ] Add timeout configuration to constants
-
-### Type Safety Completion
-- [ ] Replace all Dict[Any, Any] with specific types
-- [ ] Add return type annotations to all functions
-- [ ] Fix SerializedPlugin TypedDict optional field handling
-- [ ] Run mypy in strict mode with zero errors
-- [ ] Update utils.py and data.py type annotations
-
-## Phase 2: Performance Revolution
+## Phase 1: Async Performance Revolution (Week 1-2)
 
 ### Async Scanner Architecture
-- [ ] Create AsyncScannerMixin class
-- [ ] Implement scan_plugin_async method
-- [ ] Add scan_plugins_batch with semaphore
-- [ ] Create AsyncVST3Scanner class
-- [ ] Create AsyncAUScanner class
-- [ ] Update PedalboardScanner for async support
-- [ ] Add configurable concurrency limits
-- [ ] Benchmark performance improvements
+- [x] Create AsyncScannerMixin with concurrent plugin loading
+- [x] Implement AsyncVST3Scanner and AsyncAUScanner classes
+- [x] Add configurable concurrency limits in constants
+- [x] Update PedalboardScanner to support async mode
+- [ ] Benchmark performance improvements (target: 5-10x speedup)
 
-### Efficient Cache Management
-- [ ] Create cache/ package
-- [ ] Implement SQLiteCacheBackend class
-- [ ] Add indexed search capabilities
-- [ ] Implement lazy loading for large caches
-- [ ] Create MemoryCacheBackend for testing
-- [ ] Add cache backend selection configuration
+### SQLite Cache Backend
+- [ ] Create cache package with SQLiteCacheBackend
+- [ ] Implement indexed search with full-text capabilities
+- [ ] Add lazy loading for large datasets
+- [ ] Create migration from JSON to SQLite
+- [ ] Add cache statistics and management commands
 
-## Phase 3: CLI Revolution
+### Smart Cache Invalidation
+- [ ] Create ChangeDetector for file-based change detection
+- [ ] Implement incremental scan functionality
+- [ ] Add modification time tracking
+- [ ] Create smart update logic for changed/added/removed plugins
 
-### Migrate to Click
-- [ ] Install click and rich dependencies
-- [ ] Create new cli.py module
-- [ ] Implement scan command with options
-- [ ] Add list command with filtering
-- [ ] Create info command for plugin details
-- [ ] Add cache management commands
-- [ ] Implement config get/set commands
-- [ ] Add rich console output formatting
+## Phase 2: Modern CLI Revolution (Week 3)
 
-### Enhanced CLI Features
-- [ ] Add table output format
-- [ ] Implement CSV export
-- [ ] Add search functionality
-- [ ] Create plugin filtering options
-- [ ] Add command completion support
-- [ ] Implement verbose/quiet modes
+### Migrate to Click + Rich
+- [ ] Replace Fire with Click for command structure
+- [ ] Add Rich for tables, progress bars, and formatting
+- [ ] Implement comprehensive help system
+- [ ] Add plugin search and filtering commands
+- [ ] Create cache management subcommands
 
-### Interactive TUI (Optional)
-- [ ] Install textual dependency
-- [ ] Create tui.py module
-- [ ] Implement plugin browser interface
-- [ ] Add search and filter widgets
-- [ ] Create plugin detail view
+### Advanced Search and Filtering
+- [ ] Create PluginSearchEngine with multiple filter options
+- [ ] Implement fuzzy search using similarity matching
+- [ ] Add suggestion system for similar plugins
+- [ ] Create parameter-based filtering
+- [ ] Add sorting and pagination support
 
-## Phase 4: Testing Excellence
+## Phase 3: Production Hardening (Week 4)
 
-### Comprehensive Test Suite
-- [ ] Create test fixtures with mock plugins
-- [ ] Write unit tests for serialization
-- [ ] Test error handling scenarios
-- [ ] Add timeout handling tests
-- [ ] Create integration tests
-- [ ] Add performance benchmarks
-- [ ] Test async scanning functionality
+### Comprehensive Testing Strategy
+- [ ] Create comprehensive integration test suite
+- [ ] Add performance benchmarks and regression tests
+- [ ] Test error scenarios and edge cases
+- [ ] Add cross-platform compatibility tests
+- [ ] Implement continuous integration with multiple Python versions
 
-### Cross-Platform CI/CD
-- [ ] Create .github/workflows/test.yml
-- [ ] Add matrix testing for Python 3.9-3.12
-- [ ] Test on Ubuntu, Windows, macOS
-- [ ] Add coverage reporting with codecov
-- [ ] Set up automated benchmark comparisons
+### Error Recovery and Resilience
+- [ ] Create ResilienceManager for error recovery
+- [ ] Implement plugin blacklisting for problematic plugins
+- [ ] Add safe cache operation wrappers
+- [ ] Create cache repair and validation functionality
+- [ ] Add health monitoring and status reporting
 
-## Phase 5: Developer Experience
+## Phase 4: Advanced Features (Week 5-6)
 
-### Pre-commit Configuration
-- [ ] Create .pre-commit-config.yaml
-- [ ] Configure ruff for linting and formatting
-- [ ] Set up mypy pre-commit hook
-- [ ] Add pytest pre-commit hook
-- [ ] Install and configure pre-commit hooks
+### Configuration Management System
+- [ ] Create Pydantic-based settings with environment variable support
+- [ ] Add configuration file support (.env, config files)
+- [ ] Implement configuration validation and defaults
+- [ ] Create CLI commands for configuration management
 
-### Documentation System
-- [ ] Install sphinx and dependencies
-- [ ] Create docs/ directory structure
-- [ ] Configure sphinx for API documentation
-- [ ] Write comprehensive docstrings
-- [ ] Create user guide with examples
-- [ ] Add troubleshooting documentation
+### Plugin Categorization System
+- [ ] Create PluginCategory enum and categorization rules
+- [ ] Implement intelligent categorization based on names and parameters
+- [ ] Add category-based filtering and search
+- [ ] Create category statistics and reporting
 
-### Build and Release
-- [ ] Configure setuptools_scm for version management
-- [ ] Set up automated PyPI releases
-- [ ] Create GitHub release workflow
-- [ ] Add release notes automation
-
-## Phase 6: Advanced Features
-
-### Plugin Categorization
-- [ ] Create categorizer.py module
-- [ ] Define PluginCategory enum
-- [ ] Implement rule-based categorization
-- [ ] Add parameter-based classification
-- [ ] Create category-based filtering
-
-### Export and Import
-- [ ] Create exporters.py module
-- [ ] Implement CSV export
-- [ ] Add JSON export with metadata
+### Export and Integration Features
+- [ ] Implement CSV export functionality
+- [ ] Add JSON export with comprehensive metadata
 - [ ] Create plugin preset system
-- [ ] Add bulk import capabilities
-
-### Search and Discovery
-- [ ] Implement full-text search
-- [ ] Add fuzzy matching
-- [ ] Create tag-based organization
-- [ ] Add plugin recommendations
-- [ ] Implement plugin dependency tracking
+- [ ] Add bulk import/export capabilities
+- [ ] Create DAW integration helpers
 
 ## Quality Gates
 
 ### Phase 1 Completion Criteria
-- [ ] Zero mypy errors in strict mode
-- [ ] All plugins load with timeout protection
-- [ ] 100% type annotation coverage
-
-### Phase 2 Completion Criteria
 - [ ] Async scanning 5x faster than sync
 - [ ] SQLite cache working for 1000+ plugins
 - [ ] Memory usage < 50MB baseline
+- [ ] Zero mypy errors maintained
 
-### Phase 3 Completion Criteria
+### Phase 2 Completion Criteria
 - [ ] New CLI fully replaces Fire-based interface
 - [ ] Rich output formatting working
 - [ ] All commands have comprehensive help
+- [ ] Search and filtering functional
+
+### Phase 3 Completion Criteria
+- [ ] >90% test coverage achieved
+- [ ] CI passing on all platforms (Windows, macOS, Linux)
+- [ ] Performance benchmarks in place
+- [ ] Error recovery working reliably
 
 ### Phase 4 Completion Criteria
-- [ ] >90% test coverage
-- [ ] CI passing on all platforms
-- [ ] Performance benchmarks in place
-
-### Phase 5 Completion Criteria
-- [ ] Pre-commit hooks enforcing quality
-- [ ] Complete API documentation
-- [ ] Automated release process
-
-### Phase 6 Completion Criteria
-- [ ] Plugin categorization working
+- [ ] Plugin categorization working accurately
 - [ ] Export formats functional
-- [ ] Search capabilities implemented
+- [ ] Search capabilities fully implemented
+- [ ] Configuration system operational
 
 ## Dependencies to Add
 
 ### Core Dependencies
 - [ ] click>=8.0.0 (CLI framework)
 - [ ] rich>=13.0.0 (output formatting)
-- [ ] textual>=0.40.0 (TUI - optional)
+- [ ] pydantic>=2.0.0 (configuration management)
 
 ### Development Dependencies
-- [ ] sphinx>=7.0.0 (documentation)
-- [ ] sphinx-rtd-theme (documentation theme)
-- [ ] sphinx-click (CLI documentation)
-- [ ] pre-commit>=3.0.0 (quality hooks)
 - [ ] pytest-benchmark (performance testing)
 - [ ] pytest-asyncio (async testing)
+- [ ] psutil (memory testing)
+
+## Success Metrics
+
+### Performance Targets
+- [ ] 10-20 plugins/second scan speed (vs 1-2 current)
+- [ ] O(log n) search performance (vs O(n) current)
+- [ ] Constant memory usage with lazy loading
+
+### Reliability Targets
+- [ ] Graceful error handling and recovery
+- [ ] 99%+ plugin compatibility
+- [ ] Zero data loss on crashes
+
+### Usability Targets
+- [ ] Intuitive CLI with comprehensive help
+- [ ] Rich formatting and progress reporting
+- [ ] Fast search and filtering capabilities
 
 ## Current Status
 
-### Completed ✅
-- Scanner abstraction with protocols
-- Type safety infrastructure
-- Unified serialization layer
-- Custom exception hierarchy
-- Progress reporting abstraction
-- Constants module
-- Retry logic infrastructure
+### ✅ Completed (Phase 0)
+- Type-safe architecture with comprehensive TypedDict and protocols
+- Modular scanner design with extensible BaseScanner
+- Robust error handling with custom exception hierarchy
+- Unified serialization layer with validation
+- Zero mypy errors in strict mode
+- Timeout protection for plugin loading
 
-### In Progress 🚧
-- Type stub creation
-- Timeout handling implementation
+### 🚧 In Progress
+- Planning and design for async implementation
+- Architecture review for performance improvements
 
-### Next Priority 📋
-1. Complete type stubs for pedalboard
-2. Implement timeout handling
-3. Begin async scanner architecture
-4. Migrate CLI to Click framework
-
-## Notes
-
-- Maintain backward compatibility where possible
-- Use deprecation warnings for breaking changes
-- Keep dependencies minimal and well-maintained
-- Focus on reliability over features
-- Ensure cross-platform compatibility
+### 📋 Next Priority
+1. Implement async scanner architecture (highest impact)
+2. Create SQLite cache backend (scalability)
+3. Migrate to Click CLI framework (user experience)
 </file>
 
 <file path="src/pedalboard_pluginary/scanners/au_scanner.py">
@@ -4249,6 +5685,7 @@ from typing import Dict, List, Optional
 
 import pedalboard
 
+from ..async_scanner import AsyncScannerMixin
 from ..base_scanner import BaseScanner
 from ..constants import AU_EXTENSION, PLATFORM_MACOS, PLUGIN_TYPE_AU, PLUGIN_LOAD_TIMEOUT
 from ..exceptions import PlatformError, PluginLoadError, PluginScanError
@@ -4259,7 +5696,7 @@ from ..utils import from_pb_param
 logger = logging.getLogger(__name__)
 
 
-class AUScanner(BaseScanner):
+class AUScanner(BaseScanner, AsyncScannerMixin):
     """Scanner for Audio Unit plugins."""
     
     def __init__(
@@ -4473,273 +5910,6 @@ class AUScanner(BaseScanner):
             logger.error(f"Failed to scan {path} with auval: {e}")
         
         return None
-</file>
-
-<file path="src/pedalboard_pluginary/scanner.py">
-import json
-import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-import pedalboard
-
-from .data import (
-    copy_default_ignores,
-    get_cache_path,
-    load_ignores,
-    save_json_file,
-)
-from .exceptions import CacheCorruptedError, PluginScanError
-from .models import PluginInfo, PluginParameter
-from .progress import TqdmProgress
-from .protocols import ProgressReporter
-from .scanners.au_scanner import AUScanner
-from .scanners.vst3_scanner import VST3Scanner
-from .serialization import PluginSerializer
-from .utils import ensure_folder, from_pb_param
-
-logger: logging.Logger = logging.getLogger(__name__)
-
-
-class PedalboardScanner:
-    """Main scanner class that coordinates scanning of all plugin types."""
-
-    def __init__(
-        self,
-        ignore_paths: Optional[List[str]] = None,
-        specific_paths: Optional[List[str]] = None,
-        progress_reporter: Optional[ProgressReporter] = None,
-    ):
-        """Initialize the scanner with optional ignore paths and specific paths.
-        
-        Args:
-            ignore_paths: List of regex patterns for paths to ignore.
-            specific_paths: List of specific paths to scan.
-            progress_reporter: Optional progress reporter instance.
-        """
-        self.ignore_paths = ignore_paths or []
-        self.specific_paths = specific_paths or []
-        self.plugins: Dict[str, PluginInfo] = {}
-        self.plugins_path = get_cache_path("plugins")
-        self.ignores_path = get_cache_path("ignores")
-        self.progress_reporter = progress_reporter or TqdmProgress()
-        
-        # Initialize ignores
-        copy_default_ignores(self.ignores_path)
-        self.ignores = load_ignores(self.ignores_path)
-        
-        # Initialize scanners
-        self.scanners = [
-            AUScanner(
-                ignore_paths=self.ignore_paths, specific_paths=self.specific_paths
-            ),
-            VST3Scanner(
-                ignore_paths=self.ignore_paths, specific_paths=self.specific_paths
-            ),
-        ]
-        
-        # Load existing plugin data if available
-        self.load_data()
-
-    def load_data(self) -> None:
-        """Load existing plugin data from cache."""
-        try:
-            self.plugins = PluginSerializer.load_plugins(self.plugins_path)
-        except CacheCorruptedError as e:
-            logger.warning(f"Cache corrupted, will perform full scan: {e}")
-            self.plugins = {}
-
-    def save_data(self) -> None:
-        """Save plugin data to cache."""
-        PluginSerializer.save_plugins(self.plugins, self.plugins_path)
-        
-        # Save updated ignores
-        save_json_file(list(self.ignores), self.ignores_path)
-
-    def full_scan(self) -> Dict[str, PluginInfo]:
-        """Perform a full scan of all plugin types."""
-        self.plugins = {}
-        total_files = 0
-        
-        # First, count all plugin files
-        all_plugin_files = []
-        for scanner in self.scanners:
-            plugin_files = scanner.find_plugin_files()
-            all_plugin_files.extend([(scanner, pf) for pf in plugin_files])
-            total_files += len(plugin_files)
-        
-        # Scan all plugins with progress reporting
-        self.progress_reporter.start(total_files, "Scanning plugins")
-        
-        for scanner, plugin_file in all_plugin_files:
-            plugin_key = f"{scanner.__class__.__name__.replace('Scanner', '').lower()}:{plugin_file}"
-            
-            # Skip ignored plugins
-            if plugin_key in self.ignores:
-                logger.info(f"Skipping ignored plugin: {plugin_file}")
-                self.progress_reporter.update(1, f"Skipped: {plugin_file.name}")
-                continue
-            
-            try:
-                plugin_info = scanner.scan_plugin(plugin_file)
-                if plugin_info:
-                    self.plugins[plugin_info.id] = plugin_info
-                    logger.info(f"Scanned plugin: {plugin_file}")
-                    self.progress_reporter.update(1, f"Scanned: {plugin_info.name}")
-                else:
-                    self.progress_reporter.update(1)
-            except PluginScanError as e:
-                logger.error(f"Failed to scan plugin {plugin_file}: {e}")
-                self.ignores.add(plugin_key)
-                self.progress_reporter.update(1, f"Failed: {plugin_file.name}")
-            except Exception as e:
-                logger.error(f"Unexpected error scanning {plugin_file}: {e}")
-                self.ignores.add(plugin_key)
-                self.progress_reporter.update(1, f"Error: {plugin_file.name}")
-        
-        self.progress_reporter.finish(f"Scanned {len(self.plugins)} plugins")
-        
-        # Save the results
-        self.save_data()
-        return self.plugins
-
-    def update_scan(self) -> Dict[str, PluginInfo]:
-        """Update the scan with new plugins while preserving existing data."""
-        # Keep track of existing plugins
-        existing_plugins = set(self.plugins.keys())
-        new_plugins = {}
-        
-        # Find all plugin files
-        all_plugin_files = []
-        for scanner in self.scanners:
-            plugin_files = scanner.find_plugin_files()
-            all_plugin_files.extend([(scanner, pf) for pf in plugin_files])
-        
-        # Only scan plugins that aren't already in the cache
-        plugins_to_scan = []
-        for scanner, plugin_file in all_plugin_files:
-            plugin_type = scanner.__class__.__name__.replace('Scanner', '').lower()
-            plugin_key = f"{plugin_type}:{plugin_file}"
-            
-            if plugin_key not in existing_plugins and plugin_key not in self.ignores:
-                plugins_to_scan.append((scanner, plugin_file, plugin_key))
-        
-        # Scan new plugins with progress reporting
-        if plugins_to_scan:
-            self.progress_reporter.start(len(plugins_to_scan), "Scanning new plugins")
-            
-            for scanner, plugin_file, plugin_key in plugins_to_scan:
-                try:
-                    plugin_info = scanner.scan_plugin(plugin_file)
-                    if plugin_info:
-                        self.plugins[plugin_info.id] = plugin_info
-                        new_plugins[plugin_info.id] = plugin_info
-                        logger.info(f"Scanned new plugin: {plugin_file}")
-                        self.progress_reporter.update(1, f"Scanned: {plugin_info.name}")
-                    else:
-                        self.progress_reporter.update(1)
-                except PluginScanError as e:
-                    logger.error(f"Failed to scan plugin {plugin_file}: {e}")
-                    self.ignores.add(plugin_key)
-                    self.progress_reporter.update(1, f"Failed: {plugin_file.name}")
-                except Exception as e:
-                    logger.error(f"Unexpected error scanning {plugin_file}: {e}")
-                    self.ignores.add(plugin_key)
-                    self.progress_reporter.update(1, f"Error: {plugin_file.name}")
-            
-            self.progress_reporter.finish(f"Found {len(new_plugins)} new plugins")
-            
-            # Save updated data
-            self.save_data()
-        
-        return new_plugins
-
-    def get_json(self) -> str:
-        """Return the plugins data as a JSON string."""
-        # Use the serializer to convert plugins to dict format
-        plugins_dict = {}
-        for key, plugin_info in self.plugins.items():
-            plugins_dict[key] = PluginSerializer.plugin_to_dict(plugin_info)
-        
-        return json.dumps(plugins_dict, indent=2)
-</file>
-
-<file path="README.md">
-# Pedalboard Pluginary
-
-[![Codecov](https://codecov.io/gh/twardoch/pedalboard-pluginary/branch/main/graph/badge.svg?token=YOUR_CODECOV_TOKEN_HERE)](https://codecov.io/gh/twardoch/pedalboard-pluginary)
-<!-- Replace YOUR_CODECOV_TOKEN_HERE with the actual token from Codecov if needed, or remove the token part if your repo is public and Codecov supports tokenless uploads for it.
-The URL should also be verified once the repo is active on Codecov. -->
-
-_Pedalboard Pluginary_ is an independent Python-based package and command-line tool that scans and lists VST-3 plugins on macOS and Windows, and Audio Unit (AU) plugins on macOS. It’s intended as a companion for the _[Pedalboard](https://github.com/spotify/pedalboard)_ Python library by Spotify, but it’s not affiliated with _Pedalboard_ or Spotify.
-
-## Features
-
-With _Pedalboard Pluginary_, you can scan and list VST-3 and AU audio plugins installed on your machine, including their default parameters. 
-
-- It automatically scans and catalogs VST-3 and AU plugins installed on your system.
-- Provides a command-line interface (CLI) for quick access to your plugin library.
-- Saves the plugin information in a JSON file. This file has the information about the plugin parameters and their default values. 
-- Works on Windows and macOS (Windows is currently untested).
-- It bundles an `ignores.json` file, which “blacklists” some plugins that are known to cause issues with Pedalboard. It will not scan these, and will not include them in the cache. If you find that some plugins are not working with Pedalboard, you can add them to your `ignores.json` file. See “Contributing” section below.
-
-## Future plans
-
-I plan to extend the package with another functionality, “jobs”, which will allow to load a stack of plugins with their parameter values from a dictionary or JSON file, and run them in a batch using Pedalboard. 
-
-## Installation
-
-To install _Pedalboard Pluginary_, run:
-
-```bash
-python3 -m pip install --upgrade pedalboard-pluginary
-```
-
-For the current development version:
-
-```bash
-python3 -m pip install --upgrade git+https://github.com/twardoch/pedalboard-pluginary
-```
-
-## Command-line usage
-
-After installation, you can use `pbpluginary` from the command line.
-
-### Commands:
-
-- `pbpluginary list` displays the plugin information stored in the cache, as a JSON. If no cache exists, it will scan your system and create the cache.
-- `pbpluginary scan` scans all available plugins, and caches the information. Run this if you’ve installed or upgraded some VST-3 or AU plugins.
-
-## Python usage
-
-You can use _Pedalboard Pluginary_ as a library in your Python scripts. Here's a quick example:
-
-```python
-from pedalboard_pluginary import PedalboardPluginary
-
-pluginary = PedalboardPluginary()
-print(pluginary.list_plugins())
-```
-
-This snippet will list all plugins that have been scanned and cached, as a JSON.
-
-## Changes
-
-- **v1.1.0**: Added `update` CLI command which only scans plugins that aren’t cached yet. Not perfect. Added `json` and `yaml` CLI commands. Additional refactorings. 
-- **v1.0.0**: Initial release with basic scanning and listing of both VST-3 and AU plugins, and command-line interface for easy interaction.
-
-## License
-
-- **Pedalboard Pluginary** is written by Adam Twardoch, with assistance from GPT-4.
-- Copyright (c) 2023 Adam Twardoch.
-- Licensed under the [Apache-2.0 license](https://raw.githubusercontent.com/twardoch/pedalboard-pluginary/main/LICENSE.txt).
-- _Pedalboard Pluginary_ is not affiliated with [Pedalboard](https://github.com/spotify/pedalboard) or Spotify.
-
-## Contributing
-
-- If you encounter any issues or have suggestions, feel free to open an [issue](https://github.com/twardoch/pedalboard-pluginary/issues) on GitHub. 
-- If you find that some plugins are not working with Pedalboard, open an issue that lists the key, which is the plugin type and the base filename, like `"aufx/CoreAudio"` or `"vst3/RX 10 Connect"`. You can also modify the [`default_ignores.json`](https://raw.githubusercontent.com/twardoch/pedalboard-pluginary/main/src/pedalboard_pluginary/resources/default_ignores.json) file, and submit a pull request.
-- If you want to contribute code, please open a pull request.
 </file>
 
 </files>

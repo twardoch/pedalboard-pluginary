@@ -19,6 +19,11 @@ PLUGIN_LOAD_TIMEOUT: Final[float] = 10.0  # seconds for individual plugin loadin
 MAX_SCAN_RETRIES: Final[int] = 3
 SCAN_RETRY_DELAY: Final[float] = 1.0  # seconds
 
+# Async scanning configuration
+DEFAULT_MAX_CONCURRENT: Final[int] = 10  # concurrent async scans
+MIN_CONCURRENT_SCANS: Final[int] = 1
+MAX_CONCURRENT_SCANS: Final[int] = 50
+
 # Plugin types
 PLUGIN_TYPE_VST3: Final[str] = "vst3"
 PLUGIN_TYPE_AU: Final[str] = "aufx"

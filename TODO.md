@@ -3,10 +3,10 @@
 ## Phase 1: Async Performance Revolution (Week 1-2)
 
 ### Async Scanner Architecture
-- [ ] Create AsyncScannerMixin with concurrent plugin loading
-- [ ] Implement AsyncVST3Scanner and AsyncAUScanner classes
-- [ ] Add configurable concurrency limits in constants
-- [ ] Update PedalboardScanner to support async mode
+- [x] Create AsyncScannerMixin with concurrent plugin loading
+- [x] Implement AsyncVST3Scanner and AsyncAUScanner classes
+- [x] Add configurable concurrency limits in constants
+- [x] Update PedalboardScanner to support async mode
 - [ ] Benchmark performance improvements (target: 5-10x speedup)
 
 ### SQLite Cache Backend

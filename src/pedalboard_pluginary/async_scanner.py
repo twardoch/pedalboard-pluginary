@@ -5,18 +5,24 @@ Async scanner implementation for concurrent plugin scanning.
 import asyncio
 import logging
 from pathlib import Path
-from typing import AsyncIterator, List, Optional
+from typing import AsyncIterator, List, Optional, TYPE_CHECKING
 
 from .constants import PLUGIN_LOAD_TIMEOUT
 from .models import PluginInfo
 from .protocols import ProgressReporter
 from .timeout import TimeoutError
 
+if TYPE_CHECKING:
+    from .protocols import PluginScanner
+
 logger = logging.getLogger(__name__)
 
 
 class AsyncScannerMixin:
-    """Mixin to add async capabilities to scanners."""
+    """Mixin to add async capabilities to scanners.
+    
+    This mixin expects to be mixed with a class that implements the PluginScanner protocol.
+    """
     
     async def scan_plugin_async(self, path: Path) -> Optional[PluginInfo]:
         """Async wrapper for plugin scanning with timeout.
@@ -31,7 +37,7 @@ class AsyncScannerMixin:
             # Use asyncio.to_thread for CPU-bound plugin loading
             loop = asyncio.get_event_loop()
             return await asyncio.wait_for(
-                loop.run_in_executor(None, self.scan_plugin, path),
+                loop.run_in_executor(None, self.scan_plugin, path),  # type: ignore[attr-defined]
                 timeout=PLUGIN_LOAD_TIMEOUT
             )
         except asyncio.TimeoutError:
@@ -111,7 +117,7 @@ class AsyncScannerMixin:
             List of successfully scanned plugins.
         """
         # Find plugin files
-        plugin_files = self.find_plugin_files([directory])
+        plugin_files = self.find_plugin_files([directory])  # type: ignore[attr-defined]
         
         # Scan plugins concurrently
         plugins = []
