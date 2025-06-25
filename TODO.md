@@ -1,81 +1,154 @@
-# Pedalboard Pluginary - TODO List
+# Pedalboard Pluginary - Streamlined TODO List
 
-## High Priority
+## Phase 1: Foundation and Type Safety (Immediate)
 
-### Code Cleanup
-- [x] Create PLAN.md and TODO.md files
-- [ ] Fix duplicate imports in scanner.py
-- [ ] Remove redundant BaseScanner class definition
-- [ ] Fix duplicate full_scan method in PedalboardScanner
-- [ ] Remove obsolete scan_aufx_plugins and scan_vst3_plugins methods
-- [ ] Clean up imports and organize them properly
+### Scanner Protocol and Base Classes
+- [ ] Create protocols.py with PluginScanner Protocol definition
+- [ ] Implement BaseScanner class with common functionality
+- [ ] Refactor VST3Scanner to inherit from BaseScanner
+- [ ] Refactor AUScanner to inherit from BaseScanner
+- [ ] Add validate_plugin_path method to all scanners
 
-### Type Safety
-- [ ] Fix mypy errors in scanner.py
-- [ ] Add proper type annotations for pedalboard imports
-- [ ] Fix PedalboardPluginType alias usage
-- [ ] Add Protocol definitions for plugin interfaces
+### Type Safety Improvements
+- [ ] Create types.py with type aliases and TypedDict definitions
+- [ ] Add type stubs for pedalboard library
+- [ ] Replace all Dict[str, Any] with proper types
+- [ ] Remove all # type: ignore comments with proper solutions
+- [ ] Implement type guards for runtime validation
 
-### Critical Bugs
-- [ ] Fix scanner initialization (missing ignores attribute)
-- [ ] Fix scanner method calls in PedalboardScanner
-- [ ] Ensure proper plugin loading with correct pedalboard API
+### Unified Serialization
+- [ ] Create serialization.py module
+- [ ] Implement PluginSerializer class
+- [ ] Replace duplicate serialization code in scanner.py
+- [ ] Add proper error handling to serialization
+- [ ] Add validation for loaded data
 
-## Medium Priority
+## Phase 2: Performance and Architecture
 
-### Async Support
-- [ ] Create async versions of scanner classes
-- [ ] Implement concurrent plugin scanning
-- [ ] Add async file I/O operations
-- [ ] Update CLI to support async operations
-
-### Progress Callbacks
-- [ ] Define progress callback protocol
-- [ ] Add progress support to scanner classes
-- [ ] Integrate tqdm for CLI progress
-- [ ] Add cancellation support
-
-### Caching
-- [ ] Implement cache versioning
-- [ ] Add cache validation on load
-- [ ] Support incremental cache updates
-- [ ] Add cache management CLI commands
+### Async Scanning
+- [ ] Create async_protocols.py with AsyncPluginScanner Protocol
+- [ ] Implement AsyncVST3Scanner class
+- [ ] Implement AsyncAUScanner class
+- [ ] Add async methods to PedalboardScanner
+- [ ] Implement concurrent scanning with progress callbacks
+- [ ] Add configurable concurrency limits
 
 ### Error Handling
-- [ ] Create custom exception classes
-- [ ] Add proper error handling in scanners
-- [ ] Implement retry logic for failures
-- [ ] Improve error messages
+- [ ] Create exceptions.py with exception hierarchy
+- [ ] Replace generic Exception catches with specific ones
+- [ ] Implement retry decorator with exponential backoff
+- [ ] Add timeout handling for plugin loading
+- [ ] Create context managers for resource handling
 
-## Low Priority
+### Caching Abstraction
+- [ ] Create cache/protocols.py with CacheBackend Protocol
+- [ ] Implement JSONCacheBackend with improvements
+- [ ] Add cache versioning metadata
+- [ ] Implement cache validation on load
+- [ ] Add cache migration system
+- [ ] Create cache management utilities
 
-### Documentation
+## Phase 3: CLI Enhancement
+
+### CLI Framework Upgrade
+- [ ] Replace Fire with Click or Typer
+- [ ] Add comprehensive help text
+- [ ] Implement argument validation
+- [ ] Add command completion support
+- [ ] Create configuration management
+
+### New CLI Commands
+- [ ] Implement enhanced scan command with options
+- [ ] Add list command with filtering and search
+- [ ] Create info command for plugin details
+- [ ] Add cache management commands
+- [ ] Implement config get/set commands
+
+### Progress Reporting
+- [ ] Create progress.py with ProgressReporter Protocol
+- [ ] Implement TqdmProgress backend
+- [ ] Add RichProgress backend
+- [ ] Create NoOpProgress for quiet mode
+- [ ] Implement CallbackProgress for programmatic use
+
+## Phase 4: Testing and Quality
+
+### Test Coverage
+- [ ] Add unit tests for BaseScanner
+- [ ] Mock pedalboard in scanner tests
+- [ ] Add serialization tests
+- [ ] Test error handling scenarios
+- [ ] Add integration tests for full workflow
+- [ ] Create performance benchmarks
+
+### CI/CD Setup
+- [ ] Create GitHub Actions workflow
+- [ ] Add matrix testing for multiple Python versions
+- [ ] Configure code coverage reporting
+- [ ] Add platform-specific tests
+- [ ] Set up automated releases
+
+### Code Quality
+- [ ] Configure pre-commit hooks
+- [ ] Set up black for formatting
+- [ ] Configure mypy for type checking
+- [ ] Add ruff for linting
+- [ ] Create development setup script
+
+## Phase 5: Documentation
+
+### User Documentation
 - [ ] Update README with new features
-- [ ] Add API documentation
-- [ ] Create usage examples
-- [ ] Document configuration options
+- [ ] Create installation guide per platform
+- [ ] Write usage examples
+- [ ] Add troubleshooting section
+- [ ] Create FAQ document
 
-### Build and CI
-- [ ] Set up GitHub Actions workflow
-- [ ] Configure codecov integration
-- [ ] Add pre-commit hooks
-- [ ] Update build.sh script
+### API Documentation
+- [ ] Add comprehensive docstrings
+- [ ] Configure Sphinx documentation
+- [ ] Generate API reference
+- [ ] Add code examples
+- [ ] Create architecture overview
 
-### Testing
-- [ ] Increase test coverage to 90%+
-- [ ] Add integration tests
-- [ ] Add performance benchmarks
-- [ ] Test on Windows platform
+### Developer Guide
+- [ ] Write contributing guidelines
+- [ ] Document plugin format specs
+- [ ] Create development setup guide
+- [ ] Add testing guidelines
+- [ ] Document release process
 
-## Future Enhancements
-- [ ] Add plugin preset management
-- [ ] Support for CLAP plugins
-- [ ] Plugin categorization and tagging
-- [ ] Export to different formats (CSV, etc.)
-- [ ] Web UI for plugin management
+## Quick Wins (Can be done anytime)
 
-## Notes
-- Maintain backward compatibility
-- Focus on reliability over features
-- Keep dependencies minimal
-- Ensure cross-platform compatibility
+- [ ] Fix import order in all files
+- [ ] Add __all__ exports to __init__.py files
+- [ ] Update .gitignore with common patterns
+- [ ] Add py.typed marker for type checking
+- [ ] Create constants.py for magic strings
+- [ ] Add logging configuration
+- [ ] Update package metadata in pyproject.toml
+
+## Future Enhancements (Post-release)
+
+- [ ] Plugin categorization system
+- [ ] Web UI development
+- [ ] Plugin preset management
+- [ ] DAW integration
+- [ ] Cloud sync support
+- [ ] Plugin compatibility database
+
+## Current Status
+
+✅ Fixed scanner.py duplicate code and errors
+✅ Implemented basic plugin parameter extraction
+✅ Added progress bars for scanning
+✅ Created initial planning documents
+
+🚧 In Progress:
+- Type safety improvements
+- Scanner abstraction
+
+📋 Next Priority:
+- Create protocols.py
+- Implement BaseScanner
+- Fix serialization duplication

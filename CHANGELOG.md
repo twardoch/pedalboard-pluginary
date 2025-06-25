@@ -24,11 +24,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed parameter order in save_json_file calls
 - Fixed VST3Scanner inheritance issue (removed BaseScanner dependency)
 - Fixed missing scan_plugin method implementations in scanner classes
+- Implemented proper plugin parameter extraction using pedalboard API
+- Added progress bars using tqdm for plugin scanning
+- Enhanced AU scanner with fallback to auval for metadata extraction
+- Improved VST3 scanner with manufacturer and display name extraction
 
 ### Removed
 - Removed obsolete scan_aufx_plugins and scan_vst3_plugins methods
 - Removed redundant BaseScanner class definition in scanner.py
 - Removed unnecessary type aliases in scanner modules
+
+### Enhanced
+- Rewrote VST3Scanner to properly load plugins and extract parameters
+- Rewrote AUScanner to properly load plugins with fallback to auval
+- Added proper plugin metadata extraction (manufacturer, display name)
+- Improved plugin path discovery for both VST3 and AU formats
 
 ## [1.1.0] - Previous Release
 
