@@ -1,11 +1,17 @@
 import os
-from pedalboard_pluginary.data import get_cache_path
 from unittest.mock import patch
+
+from pedalboard_pluginary.data import get_cache_path
+
 
 def test_get_cache_path_windows():
     with patch.dict(os.environ, {"APPDATA": "C:\\Users\\TestUser\\AppData"}):
         path = get_cache_path("test_cache")
-        assert str(path) == "C:\\Users\\TestUser\\AppData\\com.twardoch.pedalboard-pluginary\\test_cache.json"
+        assert (
+            str(path)
+            == "C:\\Users\\TestUser\\AppData\\com.twardoch.pedalboard-pluginary\\test_cache.json"
+        )
+
 
 @patch('platform.system', return_value='Darwin')
 def test_get_cache_path_macos(mock_platform_system):

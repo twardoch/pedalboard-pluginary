@@ -1,374 +1,232 @@
-import asyncio
-import json
+import itertools
 import logging
+import os
+import platform
+import re
+import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, cast
-
-from .scanners.au_scanner import AUScanner
-from .scanners.vst3_scanner import VST3Scanner
-from .async_scanner import AsyncScannerMixin
+from urllib.parse import unquote, urlparse
 
 import pedalboard
+from tqdm import tqdm
 
-from .constants import DEFAULT_MAX_CONCURRENT
 from .data import (
     copy_default_ignores,
     get_cache_path,
-    get_sqlite_cache_path,
     load_ignores,
+    load_json_file,
     save_json_file,
 )
-from .cache import SQLiteCacheBackend, JSONCacheBackend, migrate_json_to_sqlite
-from .exceptions import CacheCorruptedError, PluginScanError
-from .models import PluginInfo, PluginParameter
-from .progress import TqdmProgress
-from .protocols import ProgressReporter, CacheBackend
-from .serialization import PluginSerializer
 from .utils import ensure_folder, from_pb_param
 
-logger: logging.Logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("Scanner")
 
 
 class PedalboardScanner:
-    """Main scanner class that coordinates scanning of all plugin types."""
+    RE_AUFX = re.compile(r"aufx\s+(\w+)\s+(\w+)\s+-\s+(.*?):\s+(.*?)\s+\((.*?)\)")
 
-    def __init__(
-        self,
-        ignore_paths: Optional[List[str]] = None,
-        specific_paths: Optional[List[str]] = None,
-        progress_reporter: Optional[ProgressReporter] = None,
-        async_mode: bool = False,
-        max_concurrent: int = DEFAULT_MAX_CONCURRENT,
-        use_sqlite: bool = True,
-    ):
-        """Initialize the scanner with optional ignore paths and specific paths.
-        
-        Args:
-            ignore_paths: List of regex patterns for paths to ignore.
-            specific_paths: List of specific paths to scan.
-            progress_reporter: Optional progress reporter instance.
-            async_mode: Whether to use async scanning for better performance.
-            max_concurrent: Maximum number of concurrent scans (async mode only).
-            use_sqlite: Whether to use SQLite cache backend (default: True).
-        """
-        self.ignore_paths = ignore_paths or []
-        self.specific_paths = specific_paths or []
-        self.plugins: Dict[str, PluginInfo] = {}
-        self.progress_reporter = progress_reporter or TqdmProgress()
-        self.async_mode = async_mode
-        self.max_concurrent = max_concurrent
-        self.use_sqlite = use_sqlite
-        
-        # Cache backend will be initialized below
-        self.cache_backend: CacheBackend
-        
-        # Initialize cache paths
+    def __init__(self):
+        self.plugins_path = get_cache_path("plugins")
+        self.plugins = {}
+        self.safe_save = True
+        self.ensure_ignores()
+
+    def ensure_ignores(self):
         self.ignores_path = get_cache_path("ignores")
-        
-        # Initialize cache backend
-        if use_sqlite:
-            self.sqlite_path = get_sqlite_cache_path("plugins")
-            self.json_path = get_cache_path("plugins")  # For migration
-            self.cache_backend = SQLiteCacheBackend(self.sqlite_path)
-            
-            # Migrate from JSON if SQLite doesn't exist but JSON does
-            if not self.sqlite_path.exists() and self.json_path.exists():
-                try:
-                    migrated_count = migrate_json_to_sqlite(self.json_path, self.sqlite_path)
-                    logger.info(f"Migrated {migrated_count} plugins from JSON to SQLite cache")
-                except Exception as e:
-                    logger.warning(f"Migration failed, starting with empty SQLite cache: {e}")
-        else:
-            self.json_path = get_cache_path("plugins")
-            self.cache_backend = JSONCacheBackend(self.json_path)
-        
-        # Initialize ignores
-        copy_default_ignores(self.ignores_path)
+        if not self.ignores_path.exists():
+            copy_default_ignores(self.ignores_path)
         self.ignores = load_ignores(self.ignores_path)
-        
-        # Initialize scanners
-        self.scanners = [
-            AUScanner(
-                ignore_paths=self.ignore_paths, specific_paths=self.specific_paths
-            ),
-            VST3Scanner(
-                ignore_paths=self.ignore_paths, specific_paths=self.specific_paths
-            ),
-        ]
-        
-        # Load existing plugin data if available
-        self.load_data()
 
-    def load_data(self) -> None:
-        """Load existing plugin data from cache."""
+    def save_plugins(self):
+        ensure_folder(self.plugins_path)
+        save_json_file(dict(sorted(self.plugins.items())), self.plugins_path)
+
+    def _list_aufx_plugins(self):
         try:
-            self.plugins = self.cache_backend.load()
-        except Exception as e:
-            logger.warning(f"Cache corrupted, will perform full scan: {e}")
-            self.plugins = {}
+            result = subprocess.run(
+                ["auval", "-l"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=True,
+            )
+            return result.stdout.splitlines()
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error running auval: {e}")
+            return []
 
-    def save_data(self) -> None:
-        """Save plugin data to cache."""
-        self.cache_backend.save(self.plugins)
-        
-        # Save updated ignores
-        save_json_file(list(self.ignores), self.ignores_path)
-
-    def full_scan(self) -> Dict[str, PluginInfo]:
-        """Perform a full scan of all plugin types."""
-        self.plugins = {}
-        total_files = 0
-        
-        # First, count all plugin files
-        all_plugin_files = []
-        for scanner in self.scanners:
-            plugin_files = scanner.find_plugin_files()
-            all_plugin_files.extend([(scanner, pf) for pf in plugin_files])
-            total_files += len(plugin_files)
-        
-        # Scan all plugins with progress reporting
-        self.progress_reporter.start(total_files, "Scanning plugins")
-        
-        for scanner, plugin_file in all_plugin_files:
-            plugin_key = f"{scanner.__class__.__name__.replace('Scanner', '').lower()}:{plugin_file}"
-            
-            # Skip ignored plugins
-            if plugin_key in self.ignores:
-                logger.info(f"Skipping ignored plugin: {plugin_file}")
-                self.progress_reporter.update(1, f"Skipped: {plugin_file.name}")
-                continue
-            
-            try:
-                plugin_info = scanner.scan_plugin(plugin_file)
-                if plugin_info:
-                    self.plugins[plugin_info.id] = plugin_info
-                    logger.info(f"Scanned plugin: {plugin_file}")
-                    self.progress_reporter.update(1, f"Scanned: {plugin_info.name}")
-                else:
-                    self.progress_reporter.update(1)
-            except PluginScanError as e:
-                logger.error(f"Failed to scan plugin {plugin_file}: {e}")
-                self.ignores.add(plugin_key)
-                self.progress_reporter.update(1, f"Failed: {plugin_file.name}")
-            except Exception as e:
-                logger.error(f"Unexpected error scanning {plugin_file}: {e}")
-                self.ignores.add(plugin_key)
-                self.progress_reporter.update(1, f"Error: {plugin_file.name}")
-        
-        self.progress_reporter.finish(f"Scanned {len(self.plugins)} plugins")
-        
-        # Save the results
-        self.save_data()
-        return self.plugins
-
-    def update_scan(self) -> Dict[str, PluginInfo]:
-        """Update the scan with new plugins while preserving existing data."""
-        # Keep track of existing plugins
-        existing_plugins = set(self.plugins.keys())
-        new_plugins = {}
-        
-        # Find all plugin files
-        all_plugin_files = []
-        for scanner in self.scanners:
-            plugin_files = scanner.find_plugin_files()
-            all_plugin_files.extend([(scanner, pf) for pf in plugin_files])
-        
-        # Only scan plugins that aren't already in the cache
-        plugins_to_scan = []
-        for scanner, plugin_file in all_plugin_files:
-            plugin_type = scanner.__class__.__name__.replace('Scanner', '').lower()
-            plugin_key = f"{plugin_type}:{plugin_file}"
-            
-            if plugin_key not in existing_plugins and plugin_key not in self.ignores:
-                plugins_to_scan.append((scanner, plugin_file, plugin_key))
-        
-        # Scan new plugins with progress reporting
-        if plugins_to_scan:
-            self.progress_reporter.start(len(plugins_to_scan), "Scanning new plugins")
-            
-            for scanner, plugin_file, plugin_key in plugins_to_scan:
-                try:
-                    plugin_info = scanner.scan_plugin(plugin_file)
-                    if plugin_info:
-                        self.plugins[plugin_info.id] = plugin_info
-                        new_plugins[plugin_info.id] = plugin_info
-                        logger.info(f"Scanned new plugin: {plugin_file}")
-                        self.progress_reporter.update(1, f"Scanned: {plugin_info.name}")
-                    else:
-                        self.progress_reporter.update(1)
-                except PluginScanError as e:
-                    logger.error(f"Failed to scan plugin {plugin_file}: {e}")
-                    self.ignores.add(plugin_key)
-                    self.progress_reporter.update(1, f"Failed: {plugin_file.name}")
-                except Exception as e:
-                    logger.error(f"Unexpected error scanning {plugin_file}: {e}")
-                    self.ignores.add(plugin_key)
-                    self.progress_reporter.update(1, f"Error: {plugin_file.name}")
-            
-            self.progress_reporter.finish(f"Found {len(new_plugins)} new plugins")
-            
-            # Save updated data
-            self.save_data()
-        
-        return new_plugins
-
-    async def full_scan_async(self) -> Dict[str, PluginInfo]:
-        """Perform a full async scan of all plugin types."""
-        if not self.async_mode:
-            raise ValueError("Async mode not enabled. Set async_mode=True during initialization.")
-        
-        self.plugins = {}
-        
-        # Collect all plugin files from all scanners
-        all_plugin_files = []
-        for scanner in self.scanners:
-            plugin_files = scanner.find_plugin_files()
-            all_plugin_files.extend(plugin_files)
-        
-        # Filter out ignored plugins
-        files_to_scan = []
-        for plugin_file in all_plugin_files:
-            # Find the appropriate scanner for this file
-            found_scanner = self._find_scanner_for_file(plugin_file)
-            if found_scanner:
-                plugin_key = f"{found_scanner.__class__.__name__.replace('Scanner', '').lower()}:{plugin_file}"
+    def _find_aufx_plugins(self, plugin_paths=None):
+        if plugin_paths:
+            plugin_paths = [Path(p).resolve() for p in plugin_paths]
+        aufx_plugins = []
+        plugin_type = "aufx"
+        for line in self._list_aufx_plugins():
+            match = self.RE_AUFX.match(line)
+            if match:
+                (
+                    plugin_code,
+                    vendor_code,
+                    vendor_name,
+                    plugin_name,
+                    plugin_url,
+                ) = match.groups()
+                plugin_path = Path(unquote(urlparse(plugin_url).path)).resolve()
+                plugin_fn = plugin_path.stem
+                plugin_key = f"{plugin_type}/{plugin_fn}"
                 if plugin_key not in self.ignores:
-                    files_to_scan.append(plugin_file)
-        
-        # Scan plugins asynchronously
-        if files_to_scan:
-            # Use the first scanner that supports async (they all do now)
-            async_scanner = cast(AsyncScannerMixin, self.scanners[0])  # VST3Scanner and AUScanner both have AsyncScannerMixin
-            
-            scanned_plugins = []
-            async for plugin in async_scanner.scan_plugins_batch(
-                files_to_scan, 
-                max_concurrent=self.max_concurrent,
-                progress_reporter=self.progress_reporter
-            ):
-                scanned_plugins.append(plugin)
-                self.plugins[plugin.id] = plugin
-        
-        # Save the results
-        self.save_data()
-        return self.plugins
-    
-    async def update_scan_async(self) -> Dict[str, PluginInfo]:
-        """Update the scan asynchronously with new plugins while preserving existing data."""
-        if not self.async_mode:
-            raise ValueError("Async mode not enabled. Set async_mode=True during initialization.")
-        
-        # Keep track of existing plugins
-        existing_plugins = set(self.plugins.keys())
-        new_plugins = {}
-        
-        # Find all plugin files
-        all_plugin_files = []
-        for scanner in self.scanners:
-            plugin_files = scanner.find_plugin_files()
-            all_plugin_files.extend(plugin_files)
-        
-        # Only scan plugins that aren't already in the cache
-        files_to_scan = []
-        for plugin_file in all_plugin_files:
-            found_scanner = self._find_scanner_for_file(plugin_file)
-            if found_scanner:
-                plugin_type = found_scanner.__class__.__name__.replace('Scanner', '').lower()
-                plugin_key = f"{plugin_type}:{plugin_file}"
-                
-                if plugin_key not in existing_plugins and plugin_key not in self.ignores:
-                    files_to_scan.append(plugin_file)
-        
-        # Scan new plugins asynchronously
-        if files_to_scan:
-            async_scanner = cast(AsyncScannerMixin, self.scanners[0])
-            
-            async for plugin in async_scanner.scan_plugins_batch(
-                files_to_scan,
-                max_concurrent=self.max_concurrent,
-                progress_reporter=self.progress_reporter
-            ):
-                self.plugins[plugin.id] = plugin
-                new_plugins[plugin.id] = plugin
-            
-            # Save updated data
-            self.save_data()
-        
-        return new_plugins
-    
-    def _find_scanner_for_file(self, plugin_file: Path) -> Optional[Union[AUScanner, VST3Scanner]]:
-        """Find the appropriate scanner for a given plugin file."""
-        for scanner in self.scanners:
-            if scanner.validate_plugin_path(plugin_file):
-                return scanner  # type: ignore[return-value]
-        return None
+                    if plugin_paths and plugin_path not in plugin_paths:
+                        continue
+                    aufx_plugins.append(plugin_path)
+        return aufx_plugins
 
-    def get_json(self) -> str:
-        """Return the plugins data as a JSON string."""
-        # Use the serializer to convert plugins to dict format
-        plugins_dict = {}
-        for key, plugin_info in self.plugins.items():
-            plugins_dict[key] = PluginSerializer.plugin_to_dict(plugin_info)
-        
-        return json.dumps(plugins_dict, indent=2)
-    
-    def search_plugins(self, query: str, limit: int = 50) -> List[PluginInfo]:
-        """Search plugins using full-text search (SQLite only).
-        
-        Args:
-            query: Search query string.
-            limit: Maximum number of results to return.
-            
-        Returns:
-            List of matching PluginInfo objects.
-        """
-        if isinstance(self.cache_backend, SQLiteCacheBackend):
-            return self.cache_backend.search(query, limit)
+    def _get_vst3_folders(self, extra_folders=None):
+        os_name = platform.system()
+
+        if os_name == "Windows":
+            folders = [
+                Path(os.getenv("ProgramFiles", "") + r"\Common Files\VST3"),
+                Path(os.getenv("ProgramFiles(x86)", "") + r"\Common Files\VST3"),
+            ]
+        elif os_name == "Darwin":  # macOS
+            folders = [
+                Path("~/Library/Audio/Plug-Ins/VST3").expanduser(),
+                Path("/Library/Audio/Plug-Ins/VST3"),
+            ]
+        elif os_name == "Linux":
+            folders = [
+                Path("~/.vst3").expanduser(),
+                Path("/usr/lib/vst3"),
+                Path("/usr/local/lib/vst3"),
+            ]
         else:
-            # Fallback for JSON backend - simple name/manufacturer filtering
-            results = []
-            query_lower = query.lower()
-            for plugin in self.plugins.values():
-                if (query_lower in plugin.name.lower() or 
-                    (plugin.manufacturer and query_lower in plugin.manufacturer.lower())):
-                    results.append(plugin)
-                if len(results) >= limit:
-                    break
-            return results
-    
-    def filter_by_type(self, plugin_type: str) -> List[PluginInfo]:
-        """Filter plugins by type.
-        
-        Args:
-            plugin_type: Type of plugins to filter (e.g., 'vst3', 'au').
-            
-        Returns:
-            List of matching PluginInfo objects.
-        """
-        if isinstance(self.cache_backend, SQLiteCacheBackend):
-            return self.cache_backend.filter_by_type(plugin_type)
-        else:
-            # Fallback for JSON backend
-            return [plugin for plugin in self.plugins.values() 
-                   if plugin.plugin_type.lower() == plugin_type.lower()]
-    
-    def get_cache_stats(self) -> Dict[str, int]:
-        """Get cache statistics.
-        
-        Returns:
-            Dictionary with cache statistics.
-        """
-        if isinstance(self.cache_backend, SQLiteCacheBackend):
-            return self.cache_backend.get_stats()
-        else:
-            # Basic stats for JSON backend
-            stats = {'total_plugins': len(self.plugins)}
-            type_counts: Dict[str, int] = {}
-            for plugin in self.plugins.values():
-                plugin_type = plugin.plugin_type
-                type_counts[plugin_type] = type_counts.get(plugin_type, 0) + 1
-                
-            for plugin_type, count in type_counts.items():
-                stats[f"{plugin_type}_plugins"] = count
-                
-            return stats
+            folders = []
+
+        if extra_folders:
+            folders.extend(Path(p) for p in extra_folders)
+
+        return [folder for folder in folders if folder.exists()]
+
+    def _find_vst3_plugins(self, extra_folders=None, plugin_paths=None):
+        vst3_plugins = []
+        plugin_type = "vst3"
+        if plugin_paths:
+            plugin_paths = [Path(p).resolve() for p in plugin_paths]
+
+        plugin_paths = plugin_paths or list(
+            itertools.chain.from_iterable(
+                folder.glob(f"*.{plugin_type}")
+                for folder in self._get_vst3_folders(extra_folders=extra_folders)
+            )
+        )
+        for plugin_path in plugin_paths:
+            plugin_fn = plugin_path.stem
+            plugin_key = f"{plugin_type}/{plugin_fn}"
+            if plugin_key not in self.ignores:
+                vst3_plugins.append(plugin_path)
+        return vst3_plugins
+
+    def get_plugin_params(self, plugin_path, plugin_name):
+        plugin = pedalboard.load_plugin(str(plugin_path), plugin_name=plugin_name)
+        plugin_params = {
+            k: from_pb_param(plugin.__getattr__(k)) for k in plugin.parameters.keys()
+        }
+        return plugin_params
+
+    def scan_typed_plugin_path(
+        self, plugin_type, plugin_key, plugin_path, plugin_fn, plugin_loader
+    ):
+        plugin_path = str(plugin_path)
+        plugin_names = plugin_loader.get_plugin_names_for_file(plugin_path)
+        for plugin_name in plugin_names:
+            if plugin_name in self.plugins:
+                continue
+            plugin_params = self.get_plugin_params(plugin_path, plugin_name)
+            plugin_entry = {
+                "name": plugin_name,
+                "path": plugin_path,
+                "filename": plugin_fn,
+                "type": plugin_type,
+                "params": plugin_params,
+            }
+            self.plugins[plugin_name] = plugin_entry
+
+    def scan_typed_plugins(self, plugin_type, found_plugins, plugin_loader):
+        with tqdm(found_plugins, desc=f"Scanning {plugin_type}", unit="") as pbar:
+            for plugin_path in pbar:
+                plugin_fn = str(Path(plugin_path).stem)
+                plugin_key = f"{plugin_type}/{plugin_fn}"
+                pbar.set_description(plugin_key)
+                self.scan_typed_plugin_path(
+                    plugin_type, plugin_key, str(plugin_path), plugin_fn, plugin_loader
+                )
+                if self.safe_save:
+                    self.save_plugins()
+
+    def scan_aufx_plugins(self, plugin_paths=None):
+        self.scan_typed_plugins(
+            "aufx",
+            list(self._find_aufx_plugins(plugin_paths=plugin_paths)),
+            pedalboard.AudioUnitPlugin,
+        )
+
+    def scan_vst3_plugins(self, extra_folders=None, plugin_paths=None):
+        self.scan_typed_plugins(
+            "vst3",
+            list(
+                self._find_vst3_plugins(
+                    extra_folders=extra_folders, plugin_paths=plugin_paths
+                )
+            ),
+            pedalboard.VST3Plugin,
+        )
+
+    def scan_plugins(self, extra_folders=None, plugin_paths=None):
+        self.scan_vst3_plugins(extra_folders=extra_folders, plugin_paths=plugin_paths)
+        if platform.system() == "Darwin":
+            self.scan_aufx_plugins(plugin_paths=plugin_paths)
+
+    def scan(self, extra_folders=None, plugin_paths=None):
+        logger.info("\n>> Scanning plugins...")
+        self.scan_plugins(extra_folders=None, plugin_paths=plugin_paths)
+        self.save_plugins()
+        logger.info("\n>> Done!")
+
+    def rescan(self, extra_folders=None):
+        self.plugins = {}
+        self.scan(extra_folders=extra_folders)
+
+    def update(self, extra_folders=None):
+        logger.info("\n>> Scanning updated plugins...")
+        if not self.plugins_path.exists():
+            self.rescan(extra_folders=extra_folders)
+            return
+        self.plugins = load_json_file(self.plugins_path)
+        new_vst3_paths = sorted(
+            list(
+                set(self._find_vst3_plugins(extra_folders=extra_folders))
+                - {
+                    Path(p["path"]).resolve()
+                    for p in self.plugins.values()
+                    if p["type"] == "vst3"
+                }
+            )
+        )
+        self.scan_vst3_plugins(extra_folders=extra_folders, plugin_paths=new_vst3_paths)
+        new_aufx_paths = sorted(
+            list(
+                set(self._find_aufx_plugins())
+                - {
+                    Path(p["path"]).resolve()
+                    for p in self.plugins.values()
+                    if p["type"] == "aufx"
+                }
+            )
+        )
+        if platform.system() == "Darwin":
+            self.scan_aufx_plugins(plugin_paths=new_aufx_paths)
+        self.save_plugins()
+        logger.info("\n>> Done!")
+
+    def get_json(self):
+        return json.dumps(self.plugins, indent=4)
