@@ -29,19 +29,19 @@ class AUScanner(BaseScanner):
     ):
         """Initialize the AU scanner with optional ignore paths and specific paths."""
         super().__init__(ignore_paths, specific_paths)
-        self._is_macos = platform.system() == "Darwin"
+        self._is_macos = platform.system() == PLATFORM_MACOS
         if not self._is_macos:
             logger.info("AU scanning is only available on macOS.")
     
     @property
     def plugin_type(self) -> str:
         """Return the plugin type this scanner handles."""
-        return "aufx"
+        return PLUGIN_TYPE_AU
     
     @property
     def supported_extensions(self) -> List[str]:
         """Return list of file extensions this scanner supports."""
-        return [".component"]
+        return [AU_EXTENSION]
     
     def _get_au_plugin_locations(self) -> List[Path]:
         """Get standard AU plugin locations on macOS."""
@@ -184,6 +184,9 @@ class AUScanner(BaseScanner):
             logger.info(f"Successfully scanned AU plugin: {display_name}")
             return plugin_info
             
+        except PluginLoadError:
+            # Re-raise our custom exceptions
+            raise
         except Exception as e:
             logger.error(f"Failed to scan AU plugin {path} with pedalboard: {e}")
             # Fall back to basic info extraction from auval

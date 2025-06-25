@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .constants import APP_VERSION, CACHE_VERSION
+from .exceptions import CacheCorruptedError, CacheVersionError, CacheWriteError
 from .models import PluginInfo, PluginParameter
 from .types import (
     CacheData,
@@ -20,9 +22,6 @@ from .types import (
 from .utils import ensure_folder
 
 logger = logging.getLogger(__name__)
-
-# Version for cache format
-CACHE_VERSION = "2.0.0"
 
 
 class PluginSerializer:
@@ -142,7 +141,7 @@ class PluginSerializer:
             "created_at": now,
             "updated_at": now,
             "plugin_count": plugin_count,
-            "scanner_version": "0.1.0",  # TODO: Get from package version
+            "scanner_version": APP_VERSION,
         }
     
     @classmethod
@@ -177,7 +176,7 @@ class PluginSerializer:
             logger.info(f"Saved {len(plugins_dict)} plugins to {path}")
         except Exception as e:
             logger.error(f"Failed to save plugins to {path}: {e}")
-            raise
+            raise CacheWriteError(str(path), str(e))
     
     @classmethod
     def load_plugins(cls, path: Path) -> Dict[str, PluginInfo]:
@@ -198,10 +197,10 @@ class PluginSerializer:
                 data = json.load(f)
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in cache file {path}: {e}")
-            return {}
+            raise CacheCorruptedError(str(path), f"JSON decode error: {e}")
         except Exception as e:
             logger.error(f"Failed to read cache file {path}: {e}")
-            return {}
+            raise CacheCorruptedError(str(path), str(e))
         
         # Handle both old format (direct plugin dict) and new format (with metadata)
         if isinstance(data, dict) and "metadata" in data and "plugins" in data:
@@ -211,7 +210,7 @@ class PluginSerializer:
             
             if cache_version != CACHE_VERSION:
                 logger.warning(f"Cache version mismatch: expected {CACHE_VERSION}, got {cache_version}")
-                # TODO: Implement cache migration if needed
+                raise CacheVersionError(CACHE_VERSION, cache_version, str(path))
             
             plugins_data = data.get("plugins", {})
         else:
