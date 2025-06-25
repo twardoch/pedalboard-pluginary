@@ -11,6 +11,8 @@ from typing import Dict, List, Optional
 import pedalboard  # type: ignore[import-untyped]
 
 from ..base_scanner import BaseScanner
+from ..constants import PLUGIN_TYPE_VST3, VST3_EXTENSION
+from ..exceptions import PluginLoadError, PluginScanError
 from ..models import PluginInfo, PluginParameter
 from ..utils import from_pb_param
 
@@ -23,12 +25,12 @@ class VST3Scanner(BaseScanner):
     @property
     def plugin_type(self) -> str:
         """Return the plugin type this scanner handles."""
-        return "vst3"
+        return PLUGIN_TYPE_VST3
     
     @property
     def supported_extensions(self) -> List[str]:
         """Return list of file extensions this scanner supports."""
-        return [".vst3"]
+        return [VST3_EXTENSION]
     
     def _get_default_vst3_folders(self) -> List[Path]:
         """Get standard VST3 plugin folders for the current OS."""
@@ -148,6 +150,13 @@ class VST3Scanner(BaseScanner):
             logger.info(f"Successfully scanned VST3 plugin: {display_name}")
             return plugin_info
             
+        except PluginLoadError:
+            # Re-raise our custom exceptions
+            raise
         except Exception as e:
             logger.error(f"Error scanning VST3 plugin {path}: {e}")
-            return None
+            raise PluginScanError(
+                plugin_path=str(path),
+                scanner_type=self.plugin_type,
+                reason=str(e)
+            )

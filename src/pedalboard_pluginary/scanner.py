@@ -10,12 +10,12 @@ from .data import (
     copy_default_ignores,
     get_cache_path,
     load_ignores,
-    load_json_file,
     save_json_file,
 )
-from .models import ParameterValue, PluginInfo, PluginParameter
+from .models import PluginInfo, PluginParameter
 from .scanners.au_scanner import AUScanner
 from .scanners.vst3_scanner import VST3Scanner
+from .serialization import PluginSerializer
 from .utils import ensure_folder, from_pb_param
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -55,61 +55,11 @@ class PedalboardScanner:
 
     def load_data(self) -> None:
         """Load existing plugin data from cache."""
-        if self.plugins_path.exists():
-            loaded_data = load_json_file(self.plugins_path)
-            if isinstance(loaded_data, dict):
-                # Convert loaded data to PluginInfo objects
-                for key, plugin_data in loaded_data.items():
-                    if isinstance(plugin_data, dict):
-                        # Convert parameters
-                        params = {}
-                        if "parameters" in plugin_data:
-                            for param_name, param_data in plugin_data["parameters"].items():
-                                if isinstance(param_data, dict):
-                                    params[param_name] = PluginParameter(
-                                        name=param_data.get("name", param_name),
-                                        value=param_data.get("value"),
-                                    )
-                        
-                        self.plugins[key] = PluginInfo(
-                            id=plugin_data.get("id", key),
-                            name=plugin_data.get("name", ""),
-                            path=plugin_data.get("path", ""),
-                            filename=plugin_data.get("filename", ""),
-                            plugin_type=plugin_data.get("plugin_type", ""),
-                            parameters=params,
-                            manufacturer=plugin_data.get("manufacturer"),
-                            name_in_file=plugin_data.get("name_in_file"),
-                        )
+        self.plugins = PluginSerializer.load_plugins(self.plugins_path)
 
     def save_data(self) -> None:
         """Save plugin data to cache."""
-        ensure_folder(self.plugins_path.parent)
-        
-        # Convert PluginInfo objects to dictionaries for JSON serialization
-        plugins_dict = {}
-        for key, plugin_info in self.plugins.items():
-            plugin_dict = {
-                "id": plugin_info.id,
-                "name": plugin_info.name,
-                "path": plugin_info.path,
-                "filename": plugin_info.filename,
-                "plugin_type": plugin_info.plugin_type,
-                "parameters": {},
-                "manufacturer": plugin_info.manufacturer,
-                "name_in_file": plugin_info.name_in_file,
-            }
-            
-            # Convert parameters
-            for param_name, param in plugin_info.parameters.items():
-                plugin_dict["parameters"][param_name] = {
-                    "name": param.name,
-                    "value": param.value,
-                }
-            
-            plugins_dict[key] = plugin_dict
-        
-        save_json_file(plugins_dict, self.plugins_path)
+        PluginSerializer.save_plugins(self.plugins, self.plugins_path)
         
         # Save updated ignores
         save_json_file(list(self.ignores), self.ignores_path)
@@ -196,27 +146,9 @@ class PedalboardScanner:
 
     def get_json(self) -> str:
         """Return the plugins data as a JSON string."""
-        # Convert to serializable format
+        # Use the serializer to convert plugins to dict format
         plugins_dict = {}
         for key, plugin_info in self.plugins.items():
-            plugin_dict = {
-                "id": plugin_info.id,
-                "name": plugin_info.name,
-                "path": plugin_info.path,
-                "filename": plugin_info.filename,
-                "plugin_type": plugin_info.plugin_type,
-                "parameters": {},
-                "manufacturer": plugin_info.manufacturer,
-                "name_in_file": plugin_info.name_in_file,
-            }
-            
-            # Convert parameters
-            for param_name, param in plugin_info.parameters.items():
-                plugin_dict["parameters"][param_name] = {
-                    "name": param.name,
-                    "value": param.value,
-                }
-            
-            plugins_dict[key] = plugin_dict
+            plugins_dict[key] = PluginSerializer.plugin_to_dict(plugin_info)
         
         return json.dumps(plugins_dict, indent=2)

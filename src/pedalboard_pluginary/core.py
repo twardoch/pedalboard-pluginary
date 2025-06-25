@@ -1,34 +1,39 @@
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Dict
 
-from .data import get_cache_path, load_json_file
+from .data import get_cache_path
+from .models import PluginInfo
 from .scanner import PedalboardScanner
+from .serialization import PluginSerializer
 
 
 class PedalboardPluginary:
+    """Main class for the Pedalboard Pluginary application."""
+    
     plugins_path: Path
-    plugins: Dict[str, Any]  # Assuming plugin names (keys) are strings
+    plugins: Dict[str, PluginInfo]
 
     def __init__(self) -> None:
+        """Initialize the Pedalboard Pluginary instance."""
         self.plugins_path = get_cache_path("plugins")
-        self.plugins = {}  # Initialize to empty dict
+        self.plugins = {}
         self.load_data()
 
     def load_data(self) -> None:
+        """Load plugin data from cache or perform a scan if cache doesn't exist."""
         if not self.plugins_path.exists():
             scanner = PedalboardScanner()
-            scanner.full_scan()  # Updated to use full_scan instead of scan
+            scanner.full_scan()
 
-        # Ensure plugins are loaded even if scan wasn't needed or if it just ran
-        # load_json_file returns Dict[Any, Any], but we expect Dict[str, Any] for plugins
-        loaded_plugins = load_json_file(self.plugins_path)
-        if isinstance(loaded_plugins, dict):
-            self.plugins = loaded_plugins
-        else:
-            # This case should ideally not happen if save_json_file and load_json_file are robust
-            self.plugins = {}
+        # Load plugins using the serializer
+        self.plugins = PluginSerializer.load_plugins(self.plugins_path)
 
     def list_plugins(self) -> str:
         """Returns a JSON string representation of the plugins."""
-        return json.dumps(self.plugins, indent=4)
+        # Convert PluginInfo objects to dictionaries for JSON serialization
+        plugins_dict = {}
+        for plugin_id, plugin in self.plugins.items():
+            plugins_dict[plugin_id] = PluginSerializer.plugin_to_dict(plugin)
+        
+        return json.dumps(plugins_dict, indent=4)

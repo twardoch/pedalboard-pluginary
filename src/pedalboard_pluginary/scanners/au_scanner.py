@@ -11,6 +11,8 @@ from typing import Dict, List, Optional
 import pedalboard  # type: ignore[import-untyped]
 
 from ..base_scanner import BaseScanner
+from ..constants import AU_EXTENSION, PLATFORM_MACOS, PLUGIN_TYPE_AU
+from ..exceptions import PlatformError, PluginLoadError, PluginScanError
 from ..models import PluginInfo, PluginParameter
 from ..utils import from_pb_param
 
