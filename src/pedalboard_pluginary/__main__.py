@@ -21,6 +21,7 @@ from .data import (
     save_json_file,
 )
 from .models import PluginInfo
+from .types import SerializedPlugin
 from .scanner import PedalboardScanner
 
 # Define a more specific type for extra_folders if it's always List[str] after split
@@ -69,7 +70,7 @@ def update_plugins_cli(extra_folders: Optional[str] = None, verbose: int = 0) ->
     scan_plugins_cli(extra_folders, verbose)
 
 
-def list_json_cli() -> Dict[Any, Any]:
+def list_json_cli() -> Dict[str, SerializedPlugin]:
     """Lists all plugins in JSON format."""
     cache_file = get_cache_path(PLUGINS_CACHE_FILENAME_BASE)
     if not cache_file.exists():

@@ -89,7 +89,7 @@ class BaseScanner(ABC):
             return False
         
         # Check if specific paths are set and this path is in them
-        if self.specific_paths and path not in self.specific_paths:
+        if self.specific_paths and str(path) not in self.specific_paths:
             return False
         
         return True

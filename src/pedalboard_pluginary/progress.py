@@ -20,6 +20,7 @@ class TqdmProgress(ProgressReporter):
         self._pbar: Optional[tqdm[Any]] = None
         self._total: int = 0
         self._current: int = 0
+        self._description: str = ""
     
     def start(self, total: int, description: str = "") -> None:
         """Start progress tracking.
@@ -30,6 +31,7 @@ class TqdmProgress(ProgressReporter):
         """
         self._total = total
         self._current = 0
+        self._description = description
         self._pbar = tqdm(total=total, desc=description)
     
     def update(self, amount: int = 1, message: Optional[str] = None) -> None:
@@ -47,7 +49,7 @@ class TqdmProgress(ProgressReporter):
         
         if message and hasattr(self._pbar, 'set_description'):
             # Update description with message
-            self._pbar.set_description(f"{self._pbar.desc} - {message}")
+            self._pbar.set_description(f"{self._description} - {message}")
     
     def finish(self, message: Optional[str] = None) -> None:
         """Finish progress tracking.
@@ -64,7 +66,7 @@ class TqdmProgress(ProgressReporter):
         
         if message and hasattr(self._pbar, 'set_description'):
             # Update description with message
-            self._pbar.set_description(f"{self._pbar.desc} - {message}")
+            self._pbar.set_description(f"{self._description} - {message}")
         
         self._pbar.close()
         self._pbar = None

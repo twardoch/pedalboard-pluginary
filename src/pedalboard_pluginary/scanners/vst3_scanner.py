@@ -10,16 +10,18 @@ from typing import Dict, List, Optional
 
 import pedalboard
 
+from ..async_scanner import AsyncScannerMixin
 from ..base_scanner import BaseScanner
-from ..constants import PLUGIN_TYPE_VST3, VST3_EXTENSION
+from ..constants import PLUGIN_TYPE_VST3, VST3_EXTENSION, PLUGIN_LOAD_TIMEOUT
 from ..exceptions import PluginLoadError, PluginScanError
 from ..models import PluginInfo, PluginParameter
+from ..timeout import sync_timeout, TimeoutError
 from ..utils import from_pb_param
 
 logger = logging.getLogger(__name__)
 
 
-class VST3Scanner(BaseScanner):
+class VST3Scanner(BaseScanner, AsyncScannerMixin):
     """Scanner for VST3 plugins."""
     
     @property
@@ -112,9 +114,9 @@ class VST3Scanner(BaseScanner):
             return None
         
         try:
-            # Load the plugin to get its parameters
+            # Load the plugin to get its parameters with timeout
             logger.debug(f"Loading VST3 plugin: {path}")
-            plugin = pedalboard.load_plugin(str(path))
+            plugin = sync_timeout(pedalboard.load_plugin, PLUGIN_LOAD_TIMEOUT, str(path))
             
             # Extract parameters
             params: Dict[str, PluginParameter] = {}
@@ -150,6 +152,12 @@ class VST3Scanner(BaseScanner):
             logger.info(f"Successfully scanned VST3 plugin: {display_name}")
             return plugin_info
             
+        except TimeoutError as e:
+            logger.warning(f"VST3 plugin {path} timed out during loading: {e}")
+            raise PluginLoadError(
+                plugin_path=str(path),
+                reason=f"Plugin loading timed out after {e.timeout}s"
+            )
         except PluginLoadError:
             # Re-raise our custom exceptions
             raise

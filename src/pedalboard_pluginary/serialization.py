@@ -83,13 +83,9 @@ class PluginSerializer:
             "filename": plugin.filename,
             "plugin_type": plugin.plugin_type,
             "parameters": params_dict,
+            "manufacturer": plugin.manufacturer,
+            "name_in_file": plugin.name_in_file,
         }
-        
-        # Add optional fields only if they have values
-        if plugin.manufacturer is not None:
-            result["manufacturer"] = plugin.manufacturer
-        if plugin.name_in_file is not None:
-            result["name_in_file"] = plugin.name_in_file
         
         return result
     

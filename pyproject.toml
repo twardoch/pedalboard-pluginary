@@ -76,6 +76,7 @@ exclude = [
 
 [tool.mypy]
 python_version = "3.9"
+mypy_path = "src"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -87,6 +88,10 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
 warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["fire", "benedict"]
+ignore_missing_imports = true
 
 [tool.black]
 line-length = 88

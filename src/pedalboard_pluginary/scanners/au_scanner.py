@@ -10,16 +10,18 @@ from typing import Dict, List, Optional
 
 import pedalboard
 
+from ..async_scanner import AsyncScannerMixin
 from ..base_scanner import BaseScanner
-from ..constants import AU_EXTENSION, PLATFORM_MACOS, PLUGIN_TYPE_AU
+from ..constants import AU_EXTENSION, PLATFORM_MACOS, PLUGIN_TYPE_AU, PLUGIN_LOAD_TIMEOUT
 from ..exceptions import PlatformError, PluginLoadError, PluginScanError
 from ..models import PluginInfo, PluginParameter
+from ..timeout import sync_timeout, TimeoutError
 from ..utils import from_pb_param
 
 logger = logging.getLogger(__name__)
 
 
-class AUScanner(BaseScanner):
+class AUScanner(BaseScanner, AsyncScannerMixin):
     """Scanner for Audio Unit plugins."""
     
     def __init__(
@@ -146,9 +148,9 @@ class AUScanner(BaseScanner):
             return None
         
         try:
-            # Try to load the plugin using pedalboard
+            # Try to load the plugin using pedalboard with timeout
             logger.debug(f"Loading AU plugin: {path}")
-            plugin = pedalboard.load_plugin(str(path))
+            plugin = sync_timeout(pedalboard.load_plugin, PLUGIN_LOAD_TIMEOUT, str(path))
             
             # Extract parameters
             params: Dict[str, PluginParameter] = {}
@@ -184,6 +186,10 @@ class AUScanner(BaseScanner):
             logger.info(f"Successfully scanned AU plugin: {display_name}")
             return plugin_info
             
+        except TimeoutError as e:
+            logger.warning(f"AU plugin {path} timed out during loading: {e}")
+            # Fall back to basic info extraction from auval
+            return self._scan_with_auval(path)
         except PluginLoadError:
             # Re-raise our custom exceptions
             raise

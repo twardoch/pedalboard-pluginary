@@ -15,6 +15,7 @@ IGNORES_CACHE_FILENAME: Final[str] = "ignores"
 
 # Scanner configuration
 DEFAULT_SCAN_TIMEOUT: Final[int] = 10  # seconds
+PLUGIN_LOAD_TIMEOUT: Final[float] = 10.0  # seconds for individual plugin loading
 MAX_SCAN_RETRIES: Final[int] = 3
 SCAN_RETRY_DELAY: Final[float] = 1.0  # seconds
 

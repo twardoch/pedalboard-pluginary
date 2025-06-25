@@ -6,6 +6,10 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Dict, List, Set, Union
 
+# JSON-serializable types
+JSONValue = Union[str, int, float, bool, None, Dict[str, Any], List[Any]]
+JSONDict = Dict[str, JSONValue]
+
 from .utils import ensure_folder
 
 APP_NAME: str = "com.twardoch.pedalboard-pluginary"
@@ -50,7 +54,7 @@ def load_json_file(file_path: Path) -> Any:
     return raw_data
 
 
-def save_json_file(data: Union[Dict[Any, Any], List[Any]], file_path: Path) -> None:
+def save_json_file(data: Any, file_path: Path) -> None:
     """Save JSON data to a file."""
     ensure_folder(file_path.parent)
     with open(file_path, "w", encoding="utf-8") as file:

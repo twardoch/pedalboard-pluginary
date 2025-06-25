@@ -3,10 +3,12 @@ Type definitions and aliases for the pedalboard_pluginary package.
 """
 
 from typing import Union, Dict, Any, TypedDict, Optional
-try:
-    from typing import NotRequired  # Python 3.11+
-except ImportError:
-    from typing_extensions import NotRequired  # Python 3.9-3.10
+import sys
+
+if sys.version_info >= (3, 11):
+    from typing import NotRequired
+else:
+    from typing_extensions import NotRequired
 
 # Basic type aliases
 ParameterValue = Union[float, bool, str]

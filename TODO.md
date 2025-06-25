@@ -1,165 +1,150 @@
-# Pedalboard Pluginary - Streamlined TODO List
+# Pedalboard Pluginary - Implementation Roadmap
 
-## Phase 1: Foundation and Type Safety (Immediate)
+## Phase 1: Async Performance Revolution (Week 1-2)
 
-### Scanner Protocol and Base Classes
-- [x] Create protocols.py with PluginScanner Protocol definition
-- [x] Implement BaseScanner class with common functionality
-- [x] Refactor VST3Scanner to inherit from BaseScanner
-- [x] Refactor AUScanner to inherit from BaseScanner
-- [x] Add validate_plugin_path method to all scanners
+### Async Scanner Architecture
+- [ ] Create AsyncScannerMixin with concurrent plugin loading
+- [ ] Implement AsyncVST3Scanner and AsyncAUScanner classes
+- [ ] Add configurable concurrency limits in constants
+- [ ] Update PedalboardScanner to support async mode
+- [ ] Benchmark performance improvements (target: 5-10x speedup)
 
-### Type Safety Improvements
-- [x] Create types.py with type aliases and TypedDict definitions
-- [ ] Add type stubs for pedalboard library
-- [ ] Replace all Dict[str, Any] with proper types
-- [ ] Remove all # type: ignore comments with proper solutions
-- [x] Implement type guards for runtime validation
+### SQLite Cache Backend
+- [ ] Create cache package with SQLiteCacheBackend
+- [ ] Implement indexed search with full-text capabilities
+- [ ] Add lazy loading for large datasets
+- [ ] Create migration from JSON to SQLite
+- [ ] Add cache statistics and management commands
 
-### Unified Serialization
-- [x] Create serialization.py module
-- [x] Implement PluginSerializer class
-- [x] Replace duplicate serialization code in scanner.py
-- [x] Add proper error handling to serialization
-- [x] Add validation for loaded data
+### Smart Cache Invalidation
+- [ ] Create ChangeDetector for file-based change detection
+- [ ] Implement incremental scan functionality
+- [ ] Add modification time tracking
+- [ ] Create smart update logic for changed/added/removed plugins
 
-## Phase 2: Performance and Architecture
+## Phase 2: Modern CLI Revolution (Week 3)
 
-### Async Scanning
-- [ ] Create async_protocols.py with AsyncPluginScanner Protocol
-- [ ] Implement AsyncVST3Scanner class
-- [ ] Implement AsyncAUScanner class
-- [ ] Add async methods to PedalboardScanner
-- [ ] Implement concurrent scanning with progress callbacks
-- [ ] Add configurable concurrency limits
+### Migrate to Click + Rich
+- [ ] Replace Fire with Click for command structure
+- [ ] Add Rich for tables, progress bars, and formatting
+- [ ] Implement comprehensive help system
+- [ ] Add plugin search and filtering commands
+- [ ] Create cache management subcommands
 
-### Error Handling
-- [x] Create exceptions.py with exception hierarchy
-- [x] Replace generic Exception catches with specific ones
-- [x] Implement retry decorator with exponential backoff
-- [ ] Add timeout handling for plugin loading
-- [ ] Create context managers for resource handling
+### Advanced Search and Filtering
+- [ ] Create PluginSearchEngine with multiple filter options
+- [ ] Implement fuzzy search using similarity matching
+- [ ] Add suggestion system for similar plugins
+- [ ] Create parameter-based filtering
+- [ ] Add sorting and pagination support
 
-### Caching Abstraction
-- [ ] Create cache/protocols.py with CacheBackend Protocol
-- [ ] Implement JSONCacheBackend with improvements
-- [ ] Add cache versioning metadata
-- [ ] Implement cache validation on load
-- [ ] Add cache migration system
-- [ ] Create cache management utilities
+## Phase 3: Production Hardening (Week 4)
 
-## Phase 3: CLI Enhancement
+### Comprehensive Testing Strategy
+- [ ] Create comprehensive integration test suite
+- [ ] Add performance benchmarks and regression tests
+- [ ] Test error scenarios and edge cases
+- [ ] Add cross-platform compatibility tests
+- [ ] Implement continuous integration with multiple Python versions
 
-### CLI Framework Upgrade
-- [ ] Replace Fire with Click or Typer
-- [ ] Add comprehensive help text
-- [ ] Implement argument validation
-- [ ] Add command completion support
-- [ ] Create configuration management
+### Error Recovery and Resilience
+- [ ] Create ResilienceManager for error recovery
+- [ ] Implement plugin blacklisting for problematic plugins
+- [ ] Add safe cache operation wrappers
+- [ ] Create cache repair and validation functionality
+- [ ] Add health monitoring and status reporting
 
-### New CLI Commands
-- [ ] Implement enhanced scan command with options
-- [ ] Add list command with filtering and search
-- [ ] Create info command for plugin details
-- [ ] Add cache management commands
-- [ ] Implement config get/set commands
+## Phase 4: Advanced Features (Week 5-6)
 
-### Progress Reporting
-- [x] Create progress.py with ProgressReporter Protocol
-- [x] Implement TqdmProgress backend
-- [ ] Add RichProgress backend
-- [x] Create NoOpProgress for quiet mode
-- [x] Implement CallbackProgress for programmatic use
+### Configuration Management System
+- [ ] Create Pydantic-based settings with environment variable support
+- [ ] Add configuration file support (.env, config files)
+- [ ] Implement configuration validation and defaults
+- [ ] Create CLI commands for configuration management
 
-## Phase 4: Testing and Quality
+### Plugin Categorization System
+- [ ] Create PluginCategory enum and categorization rules
+- [ ] Implement intelligent categorization based on names and parameters
+- [ ] Add category-based filtering and search
+- [ ] Create category statistics and reporting
 
-### Test Coverage
-- [ ] Add unit tests for BaseScanner
-- [ ] Mock pedalboard in scanner tests
-- [ ] Add serialization tests
-- [ ] Test error handling scenarios
-- [ ] Add integration tests for full workflow
-- [ ] Create performance benchmarks
+### Export and Integration Features
+- [ ] Implement CSV export functionality
+- [ ] Add JSON export with comprehensive metadata
+- [ ] Create plugin preset system
+- [ ] Add bulk import/export capabilities
+- [ ] Create DAW integration helpers
 
-### CI/CD Setup
-- [ ] Create GitHub Actions workflow
-- [ ] Add matrix testing for multiple Python versions
-- [ ] Configure code coverage reporting
-- [ ] Add platform-specific tests
-- [ ] Set up automated releases
+## Quality Gates
 
-### Code Quality
-- [ ] Configure pre-commit hooks
-- [ ] Set up black for formatting
-- [ ] Configure mypy for type checking
-- [ ] Add ruff for linting
-- [ ] Create development setup script
+### Phase 1 Completion Criteria
+- [ ] Async scanning 5x faster than sync
+- [ ] SQLite cache working for 1000+ plugins
+- [ ] Memory usage < 50MB baseline
+- [ ] Zero mypy errors maintained
 
-## Phase 5: Documentation
+### Phase 2 Completion Criteria
+- [ ] New CLI fully replaces Fire-based interface
+- [ ] Rich output formatting working
+- [ ] All commands have comprehensive help
+- [ ] Search and filtering functional
 
-### User Documentation
-- [ ] Update README with new features
-- [ ] Create installation guide per platform
-- [ ] Write usage examples
-- [ ] Add troubleshooting section
-- [ ] Create FAQ document
+### Phase 3 Completion Criteria
+- [ ] >90% test coverage achieved
+- [ ] CI passing on all platforms (Windows, macOS, Linux)
+- [ ] Performance benchmarks in place
+- [ ] Error recovery working reliably
 
-### API Documentation
-- [ ] Add comprehensive docstrings
-- [ ] Configure Sphinx documentation
-- [ ] Generate API reference
-- [ ] Add code examples
-- [ ] Create architecture overview
+### Phase 4 Completion Criteria
+- [ ] Plugin categorization working accurately
+- [ ] Export formats functional
+- [ ] Search capabilities fully implemented
+- [ ] Configuration system operational
 
-### Developer Guide
-- [ ] Write contributing guidelines
-- [ ] Document plugin format specs
-- [ ] Create development setup guide
-- [ ] Add testing guidelines
-- [ ] Document release process
+## Dependencies to Add
 
-## Quick Wins (Can be done anytime)
+### Core Dependencies
+- [ ] click>=8.0.0 (CLI framework)
+- [ ] rich>=13.0.0 (output formatting)
+- [ ] pydantic>=2.0.0 (configuration management)
 
-- [ ] Fix import order in all files
-- [ ] Add __all__ exports to __init__.py files
-- [ ] Update .gitignore with common patterns
-- [x] Add py.typed marker for type checking
-- [x] Create constants.py for magic strings
-- [ ] Add logging configuration
-- [ ] Update package metadata in pyproject.toml
+### Development Dependencies
+- [ ] pytest-benchmark (performance testing)
+- [ ] pytest-asyncio (async testing)
+- [ ] psutil (memory testing)
 
-## Future Enhancements (Post-release)
+## Success Metrics
 
-- [ ] Plugin categorization system
-- [ ] Web UI development
-- [ ] Plugin preset management
-- [ ] DAW integration
-- [ ] Cloud sync support
-- [ ] Plugin compatibility database
+### Performance Targets
+- [ ] 10-20 plugins/second scan speed (vs 1-2 current)
+- [ ] O(log n) search performance (vs O(n) current)
+- [ ] Constant memory usage with lazy loading
+
+### Reliability Targets
+- [ ] Graceful error handling and recovery
+- [ ] 99%+ plugin compatibility
+- [ ] Zero data loss on crashes
+
+### Usability Targets
+- [ ] Intuitive CLI with comprehensive help
+- [ ] Rich formatting and progress reporting
+- [ ] Fast search and filtering capabilities
 
 ## Current Status
 
-✅ Fixed scanner.py duplicate code and errors
-✅ Implemented basic plugin parameter extraction
-✅ Added progress bars for scanning
-✅ Created initial planning documents
-✅ Created protocols.py with Protocol definitions
-✅ Implemented BaseScanner abstraction
-✅ Refactored scanners to use inheritance
-✅ Created unified serialization layer
-✅ Added type safety with types.py and TypedDict
-✅ Created custom exception hierarchy
-✅ Implemented progress reporting abstraction
-✅ Added retry decorator for failures
-✅ Enhanced error handling with specific exceptions
-✅ Created constants module for configuration
+### ✅ Completed (Phase 0)
+- Type-safe architecture with comprehensive TypedDict and protocols
+- Modular scanner design with extensible BaseScanner
+- Robust error handling with custom exception hierarchy
+- Unified serialization layer with validation
+- Zero mypy errors in strict mode
+- Timeout protection for plugin loading
 
-🚧 In Progress:
-- Removing remaining type: ignore comments
-- Adding comprehensive test coverage
+### 🚧 In Progress
+- Planning and design for async implementation
+- Architecture review for performance improvements
 
-📋 Next Priority:
-- Add type stubs for pedalboard library
-- Implement async scanner support
-- Create cache abstraction layer
-- Upgrade CLI framework to Click/Typer
+### 📋 Next Priority
+1. Implement async scanner architecture (highest impact)
+2. Create SQLite cache backend (scalability)
+3. Migrate to Click CLI framework (user experience)
