@@ -1,157 +1,179 @@
-# pedalboard_pluginary/scanners/au_scanner.py
 """
 Handles scanning of Audio Unit (AU) plugins on macOS.
 """
+
 import logging
 import platform
 import re
 import subprocess
 from pathlib import Path
-from typing import List, Set, Optional, Any, Dict
+from typing import Any, Dict, List, Optional, Set
 from urllib.parse import unquote, urlparse
 
-# Assuming models.py will be created with PluginInfo, PluginParameter
-# from ..models import PluginInfo, PluginParameter
-# For now, using Dict[str, Any] as placeholder
-PluginDict = Dict[str, Any]
-ParamDict = Dict[str, Any] # Replace Any with Union[float, bool, str] later
+import pedalboard  # type: ignore[import-untyped]
+
+from ..models import PluginInfo, PluginParameter
+from ..utils import from_pb_param
 
 logger = logging.getLogger(__name__)
 
+
 class AUScanner:
-    """Scans Audio Unit (AU) plugins on macOS."""
+    """Scanner for Audio Unit plugins."""
 
-    RE_AUFX: re.Pattern[str] = re.compile(
-        r"aufx\s+(\w+)\s+(\w+)\s+-\s+(.*?):\s+(.*?)\s+\((.*?)\)"
-    )
+    def __init__(
+        self,
+        ignore_paths: Optional[List[str]] = None,
+        specific_paths: Optional[List[str]] = None,
+    ):
+        """Initialize the AU scanner with optional ignore paths and specific paths."""
+        self.ignore_paths = ignore_paths or []
+        self.specific_paths = specific_paths or []
+        self._platform_check()
 
-    def __init__(self, ignores: Set[str]):
-        self.ignores = ignores
-        # self.plugins: Dict[str, PluginInfo] = {} # To be used with typed models
-
-    def _list_aufx_plugins_raw(self) -> List[str]:
-        """Lists Audio Unit plugins using auval. Returns list of lines from auval output."""
+    def _platform_check(self) -> None:
+        """Check if running on macOS."""
         if platform.system() != "Darwin":
             logger.info("AU scanning is only applicable on macOS.")
-            return []
+            return
+
+    def _list_aufx_plugins_raw(self) -> List[str]:
+        """List all Audio Unit effects plugins using auval."""
         try:
             result = subprocess.run(
-                ["auval", "-l"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                check=True,
+                ["auval", "-a"], capture_output=True, text=True, check=True
             )
             return result.stdout.splitlines()
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            logger.error(f"Error running auval (is it installed and in PATH?): {e}")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            logger.warning("Failed to run auval command.")
             return []
 
+    def _parse_aufx_path_from_auval(self, plugin_str: str) -> Optional[Path]:
+        """Parse the AU plugin path from auval output."""
+        parts = plugin_str.strip().split()
+        if len(parts) >= 3 and parts[0] == "aufx":
+            bundle_id = parts[2]
+            
+            # Common AU plugin locations
+            locations = [
+                Path("/Library/Audio/Plug-Ins/Components"),
+                Path("~/Library/Audio/Plug-Ins/Components").expanduser(),
+                Path("/System/Library/Components"),
+            ]
+            
+            for location in locations:
+                if location.exists():
+                    for component in location.glob("*.component"):
+                        if bundle_id in str(component):
+                            return component
+            
+            # Try to find by exact name match
+            for location in locations:
+                if location.exists():
+                    component_path = location / f"{bundle_id}.component"
+                    if component_path.exists():
+                        return component_path
+        
+        return None
+
     def find_plugin_files(self, plugin_paths: Optional[List[Path]] = None) -> List[Path]:
-        """
-        Finds resolvable paths to AUFX plugins from auval output, respecting ignores.
-        If plugin_paths is provided, filters the auval results to those paths.
-        """
+        """Find all AU plugin files."""
         if platform.system() != "Darwin":
             return []
 
-        aufx_plugin_files: List[Path] = []
-        plugin_type: str = "aufx"
-
-        resolved_user_plugin_paths: Optional[List[Path]] = None
         if plugin_paths:
-            resolved_user_plugin_paths = [p.resolve() for p in plugin_paths]
+            # Filter specific paths to only AU component files
+            return [p for p in plugin_paths if p.suffix == ".component" and p.exists()]
 
-        for line in self._list_aufx_plugins_raw():
-            match = self.RE_AUFX.match(line)
-            if match:
-                (
-                    _plugin_code,
-                    _vendor_code,
-                    _vendor_name,
-                    _plugin_name, # This is the plugin name, not the filename
-                    plugin_url,
-                ) = match.groups()
+        discovered_plugins = []
+        auval_output = self._list_aufx_plugins_raw()
+        
+        for line in auval_output:
+            if line.strip().startswith("aufx"):
+                plugin_path = self._parse_aufx_path_from_auval(line)
+                if plugin_path and self._should_include_path(plugin_path):
+                    discovered_plugins.append(plugin_path)
 
-                try:
-                    parsed_url = urlparse(plugin_url)
-                    plugin_path_str = unquote(parsed_url.path)
-                    if not plugin_path_str:
-                        logger.warning(f"Empty path from AUFX plugin URL: {plugin_url}")
-                        continue
+        logger.info(f"Found {len(discovered_plugins)} AU plugins to consider.")
+        return discovered_plugins
 
-                    # Some paths from auval might be like '/path/to/MyPlugin.component/Contents/MacOS/MyPlugin'
-                    # We are interested in the '.component' bundle path.
-                    # A common pattern is that the actual binary is inside .component/Contents/MacOS/
-                    # Pedalboard typically expects the path to the bundle itself.
-                    potential_path = Path(plugin_path_str)
+    def scan_plugin(self, plugin_path: Path) -> Optional[PluginInfo]:
+        """Scan an AU plugin and return its information."""
+        if not plugin_path.exists() or plugin_path.suffix != ".component":
+            return None
 
-                    # Try to find the .component or .bundle parent
-                    bundle_path: Optional[Path] = None
-                    current_path_check = potential_path
-                    while current_path_check != current_path_check.parent: # Stop at root
-                        if current_path_check.suffix in [".component", ".au", ".bundle"]: # .au is less common but possible
-                            bundle_path = current_path_check
-                            break
-                        current_path_check = current_path_check.parent
+        try:
+            # Try to load the plugin using pedalboard
+            plugin = pedalboard.load_plugin(str(plugin_path))  # type: ignore[attr-defined]
+            
+            # Extract parameters
+            params: Dict[str, PluginParameter] = {}
+            if hasattr(plugin, 'parameters'):
+                for param_name, param_value in plugin.parameters.items():
+                    # Convert the parameter value to our expected type
+                    converted_value = from_pb_param(param_value)
+                    params[param_name] = PluginParameter(
+                        name=param_name,
+                        value=converted_value,
+                    )
+            
+            # Try to get manufacturer info
+            manufacturer = None
+            if hasattr(plugin, 'manufacturer'):
+                manufacturer = str(plugin.manufacturer)
+            
+            # Get the plugin's display name
+            display_name = plugin_path.stem
+            if hasattr(plugin, 'name'):
+                display_name = str(plugin.name)
+            
+            return PluginInfo(
+                id=f"aufx/{plugin_path.stem}",
+                name=display_name,
+                path=str(plugin_path),
+                filename=plugin_path.name,
+                plugin_type="aufx",
+                parameters=params,
+                manufacturer=manufacturer,
+            )
 
-                    if not bundle_path:
-                        logger.warning(f"Could not determine bundle path for AUFX plugin at {plugin_path_str} (URL: {plugin_url}). Using direct path.")
-                        # If we can't find a bundle, pedalboard might still load it, or it might be an issue.
-                        # This path might point directly to an executable or a resource.
-                        # For now, we'll use the resolved path from the URL.
-                        # This behavior needs testing with various AU plugins.
-                        bundle_path = potential_path.resolve()
-                    else:
-                        bundle_path = bundle_path.resolve()
+        except Exception as e:
+            logger.error(f"Failed to scan AU plugin {plugin_path}: {e}")
+            # Fall back to basic info extraction from auval
+            try:
+                result = subprocess.run(
+                    ["auval", "-v", str(plugin_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                
+                # Parse basic info from auval output
+                name = plugin_path.stem
+                manufacturer = None
+                
+                for line in result.stdout.splitlines():
+                    if "NAME:" in line:
+                        name = line.split("NAME:", 1)[1].strip()
+                    elif "MANUFACTURER:" in line:
+                        manufacturer = line.split("MANUFACTURER:", 1)[1].strip()
+                
+                if name:
+                    return PluginInfo(
+                        id=f"aufx/{plugin_path.stem}",
+                        name=name,
+                        path=str(plugin_path),
+                        filename=plugin_path.name,
+                        plugin_type="aufx",
+                        manufacturer=manufacturer,
+                    )
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+                pass
 
-                except Exception as e:
-                    logger.warning(f"Could not parse/resolve AUFX plugin URL '{plugin_url}': {e}")
-                    continue
+        return None
 
-                plugin_fn_stem: str = bundle_path.stem # e.g., "MyPlugin" from "MyPlugin.component"
-                plugin_key: str = f"{plugin_type}/{plugin_fn_stem}" # Key for ignore list
-
-                if plugin_key in self.ignores:
-                    logger.debug(f"Ignoring AU plugin {plugin_key} based on ignores list.")
-                    continue
-
-                if resolved_user_plugin_paths and bundle_path not in resolved_user_plugin_paths:
-                    logger.debug(f"Skipping AU plugin {bundle_path} not in user-provided list.")
-                    continue
-
-                if bundle_path not in aufx_plugin_files: # Avoid duplicates
-                    aufx_plugin_files.append(bundle_path)
-
-        logger.info(f"Found {len(aufx_plugin_files)} AU plugin files to consider.")
-        return aufx_plugin_files
-
-    # Further methods for scanning these files (get_plugin_params, etc.) will be added
-    # when integrating with the main PedalboardScanner and models.
-    # For now, this class focuses on discovery.
-
-if __name__ == "__main__":
-    # Example Usage (macOS only)
-    if platform.system() == "Darwin":
-        logging.basicConfig(level=logging.DEBUG)
-        # Dummy ignores for testing
-        test_ignores: Set[str] = {"aufx/DLSMusicDevice", "aufx/SomeOtherPluginToIgnore"}
-
-        scanner = AUScanner(ignores=test_ignores)
-
-        print("--- Finding all AU plugins ---")
-        all_au_plugins = scanner.find_plugin_files()
-        for p_path in all_au_plugins:
-            print(p_path)
-
-        # Example with specific paths (if you knew some paths to filter by)
-        # print("\n--- Finding specific AU plugins (example, replace with actual paths) ---")
-        # specific_paths_to_check = [
-        #     Path("/Library/Audio/Plug-Ins/Components/AUNewPitch.component"),
-        #     Path("/path/to/nonexistent.component") # Example non-existent
-        # ]
-        # filtered_au_plugins = scanner.find_plugin_files(plugin_paths=specific_paths_to_check)
-        # for p_path in filtered_au_plugins:
-        #     print(p_path)
-    else:
-        print("AU scanning example is for macOS only.")
+    def _should_include_path(self, bundle_path: Path) -> bool:
+        """Determine if a bundle path should be included based on ignore and specific paths."""
+        return not any(
+            re.match(pattern, str(bundle_path)) for pattern in self.ignore_paths
+        ) and (not self.specific_paths or bundle_path in self.specific_paths)

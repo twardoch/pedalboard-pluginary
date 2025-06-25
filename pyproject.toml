@@ -1,18 +1,19 @@
 [build-system]
-requires = ["setuptools>=46.1.0", "setuptools_scm[toml]>=5"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
 
 [tool.setuptools_scm]
 version_scheme = "no-guess-dev"
 
 [project]
-name = "pedalboard_pluginary"
-description = "VST & AU plugin management for Spotify Pedalboard"
+name = "pedalboard-pluginary"
+version = "0.1.0"
+description = "A plugin scanner for Pedalboard"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "Apache-2.0" } # Or file = "LICENSE.txt" if preferred by newer setuptools
+license = { text = "Apache-2.0" }
 authors = [
-    { name = "Adam Twardoch", email = "adam+github@twardoch.com" }
+    { name = "Adam Twardoch", email = "adam@twardoch.com" }
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -28,10 +29,10 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "pedalboard>=0.8.6",
+    "pedalboard>=0.8.7",
     "fire>=0.5.0",
-    "tqdm>=4.66.1",
-    "python_benedict>=0.33.0",
+    "python-benedict>=0.33.0",
+    "pyyaml>=6.0.1",
 ]
 
 [project.urls]
@@ -40,30 +41,24 @@ Source = "https://github.com/twardoch/pedalboard-pluginary"
 Tracker = "https://github.com/twardoch/pedalboard-pluginary/issues"
 
 [project.optional-dependencies]
-testing = [
-    "pytest",
-    "pytest-cov",
-    "mypy>=1.0", # Added mypy
+dev = [
+    "pytest>=7.4.4",
+    "pytest-cov>=4.1.0",
+    "mypy>=1.8.0",
+    "flake8>=7.0.0",
+    "black>=24.1.1",
+    "isort>=5.13.2",
 ]
 
 [project.scripts]
-pbpluginary = "pedalboard_pluginary.__main__:cli"
+pbpluginary = "pedalboard_pluginary.__main__:main"
 
 [tool.setuptools]
-zip_safe = false
-include_package_data = true
-package_dir = {"" = "src"}
-# `find` directive for packages is often implicit with src layout, or can be more specific
-# For example, packages = ["pedalboard_pluginary"] if not using find:
-packages = {find = {where = ["src"], exclude = ["tests*"]}}
-
-
-[tool.setuptools.package-data]
-"pedalboard_pluginary" = ["resources/*.json"]
+packages = ["pedalboard_pluginary"]
+package-dir = {"" = "src"}
 
 [tool.pytest.ini_options]
-addopts = "--cov pedalboard_pluginary --cov-report term-missing --verbose"
-norecursedirs = ["dist", "build", ".tox"]
+addopts = "--cov=pedalboard_pluginary --cov-report=term-missing"
 testpaths = ["tests"]
 
 [tool.flake8]
@@ -79,23 +74,23 @@ exclude = [
 
 [tool.mypy]
 python_version = "3.9"
-mypy_path = "src"
-ignore_missing_imports = true # For libraries without stubs like pedalboard, fire, tqdm, benedict
-# More specific ignores can be added:
-# [[tool.mypy.overrides]]
-# module = [
-#    "pedalboard",
-#    "fire",
-#    "tqdm",
-#    "benedict"
-# ]
-# ignore_missing_imports = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
 
-# Show error codes so they can be suppressed if necessary.
-show_error_codes = true
-# Strict optional checking, etc., can be enabled for more thoroughness.
-# strict_optional = true
-# warn_return_any = true
-# warn_unused_ignores = true
-# disallow_untyped_defs = true # Enforce type hints on all functions
-# disallow_incomplete_defs = true # Enforce full type hints
+[tool.black]
+line-length = 88
+target-version = ['py39']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3

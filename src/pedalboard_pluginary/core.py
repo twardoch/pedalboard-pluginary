@@ -1,22 +1,24 @@
 import json
 from pathlib import Path
-from typing import Dict, Any
-from .data import load_json_file, get_cache_path
+from typing import Any, Dict
+
+from .data import get_cache_path, load_json_file
 from .scanner import PedalboardScanner
+
 
 class PedalboardPluginary:
     plugins_path: Path
-    plugins: Dict[str, Any] # Assuming plugin names (keys) are strings
+    plugins: Dict[str, Any]  # Assuming plugin names (keys) are strings
 
     def __init__(self) -> None:
         self.plugins_path = get_cache_path("plugins")
-        self.plugins = {} # Initialize to empty dict
+        self.plugins = {}  # Initialize to empty dict
         self.load_data()
 
     def load_data(self) -> None:
         if not self.plugins_path.exists():
             scanner = PedalboardScanner()
-            scanner.scan() # This will create and save the plugins file
+            scanner.full_scan()  # Updated to use full_scan instead of scan
 
         # Ensure plugins are loaded even if scan wasn't needed or if it just ran
         # load_json_file returns Dict[Any, Any], but we expect Dict[str, Any] for plugins
@@ -26,7 +28,6 @@ class PedalboardPluginary:
         else:
             # This case should ideally not happen if save_json_file and load_json_file are robust
             self.plugins = {}
-
 
     def list_plugins(self) -> str:
         """Returns a JSON string representation of the plugins."""

@@ -47,13 +47,23 @@ src/
   pedalboard_pluginary/
     resources/
       default_ignores.json
+    scanners/
+      __init__.py
+      au_scanner.py
+      vst3_scanner.py
     __init__.py
     __main__.py
     core.py
     data.py
+    models.py
     scanner.py
     utils.py
 tests/
+  scanners/
+    __init__.py
+    test_au_scanner.py
+    test_vst3_scanner.py
+  test_cli.py
   test_data.py
   test_utils.py
 .coveragerc
@@ -61,6 +71,7 @@ tests/
 .isort.cfg
 .pre-commit-config.yaml
 AUTHORS.md
+build.sh
 LICENSE.txt
 pyproject.toml
 README.md
@@ -70,54 +81,28 @@ tox.ini
 <files>
 This section contains the contents of the repository's files.
 
-<file path=".github/workflows/ci.yml">
-name: Python package CI
+<file path="build.sh">
+#!/usr/bin/env bash
+# this_file: build.sh
 
-on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  pull_request:
-  workflow_dispatch:
+set -e # Exit on error
 
-jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.9', '3.10', '3.11']
-    steps:
-    - uses: actions/checkout@v3
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install fire pytest
-    - name: Run tests
-      run: |
-        python -m pip install -e .
+echo "🧹 Cleaning up previous builds..."
+rm -rf build/ dist/ *.egg-info .eggs/ .pytest_cache/ .coverage .tox/ .mypy_cache/
 
-  publish:
-    needs: build-and-test
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
-    - name: Build and publish
-      env:
-        TWINE_USERNAME: __token__
-        TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
-      run: |
-        python -m pip install --upgrade build twine
-        python -m build
-        twine upload dist/*
+echo "🔍 Running type checks with mypy..."
+python -m mypy src/pedalboard_pluginary
+
+echo "�� Running tests..."
+PYTHONPATH=src pytest tests/ -p no:flake8 -p no:briefcase
+
+echo "📦 Building package..."
+python -m build
+
+echo "🚀 Installing locally..."
+pip install -e .
+
+echo "✨ Build and installation complete!"
 </file>
 
 <file path="src/pedalboard_pluginary/resources/default_ignores.json">
@@ -147,22 +132,1195 @@ jobs:
 ]
 </file>
 
-<file path="tests/test_data.py">
+<file path="src/pedalboard_pluginary/scanners/__init__.py">
+# pedalboard_pluginary/scanners/__init__.py
+
+# This file makes Python treat the `scanners` directory as a package.
+
+# Optionally, you can import specific classes or functions here to make them
+# available at the package level, e.g.:
+# from .au_scanner import AUScanner
+# from .vst3_scanner import VST3Scanner
+
+# For now, it will be kept empty.
+</file>
+
+<file path="src/pedalboard_pluginary/scanners/au_scanner.py">
+# pedalboard_pluginary/scanners/au_scanner.py
+"""
+Handles scanning of Audio Unit (AU) plugins on macOS.
+"""
+
+import logging
+import platform
+import re
+import subprocess
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
+from urllib.parse import unquote, urlparse
+
+from ..models import PluginInfo
+
+# Assuming models.py will be created with PluginInfo, PluginParameter
+# from ..models import PluginInfo, PluginParameter
+# For now, using Dict[str, Any] as placeholder
+PluginDict = Dict[str, Any]
+ParamDict = Dict[str, Any]  # Replace Any with Union[float, bool, str] later
+
+logger = logging.getLogger(__name__)
+
+
+class AUScanner:
+    """Scanner for Audio Unit plugins."""
+
+    def __init__(
+        self,
+        ignore_paths: Optional[List[str]] = None,
+        specific_paths: Optional[List[str]] = None,
+    ):
+        """Initialize the AU scanner with optional ignore paths and specific paths."""
+        self.ignore_paths = ignore_paths or []
+        self.specific_paths = specific_paths or []
+        self._platform_check()
+
+    def _platform_check(self) -> None:
+        """Check if running on macOS."""
+        if platform.system() != "Darwin":
+            logger.info("AU scanning is only applicable on macOS.")
+            return
+
+    def _list_aufx_plugins_raw(self) -> List[str]:
+        """List all Audio Unit effects plugins using auval."""
+        try:
+            result = subprocess.run(
+                ["auval", "-a"], capture_output=True, text=True, check=True
+            )
+            return result.stdout.splitlines()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return []
+
+    def find_plugin_files(self) -> List[Path]:
+        """Find all Audio Unit plugin files."""
+        if platform.system() != "Darwin":
+            return []
+
+        plugin_paths = set()
+        auval_output = self._list_aufx_plugins_raw()
+
+        for line in auval_output:
+            if "Component Bundle Path:" in line:
+                path_str = line.split("Component Bundle Path:", 1)[1].strip()
+                # Get the .component bundle path
+                bundle_path = Path(path_str).parent.parent.parent
+                if bundle_path.suffix == ".component":
+                    if self._should_include_path(bundle_path):
+                        plugin_paths.add(bundle_path)
+
+        return sorted(list(plugin_paths))
+
+    def scan_plugin(self, plugin_path: Path) -> Optional[PluginInfo]:
+        """Scan an Audio Unit plugin and return its information."""
+        if not plugin_path.exists() or plugin_path.suffix != ".component":
+            return None
+
+        try:
+            # Run auval to get plugin information
+            result = subprocess.run(
+                ["auval", "-v", "aufx", plugin_path.stem, "tstc"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            output = result.stdout
+
+            # Parse auval output
+            manufacturer = ""
+            name = ""
+            version = ""
+
+            for line in output.splitlines():
+                if "Manufacturer String:" in line:
+                    manufacturer = line.split(":", 1)[1].strip()
+                elif "AudioUnit Name:" in line:
+                    name = line.split(":", 1)[1].strip()
+                elif "Component Version:" in line:
+                    version = line.split(":", 1)[1].strip()
+
+            if name and manufacturer:
+                return PluginInfo(
+                    id=f"aufx/{plugin_path.stem}",
+                    name=name,
+                    path=str(plugin_path),
+                    filename=plugin_path.name,
+                    plugin_type="aufx",
+                    manufacturer=manufacturer,
+                )
+
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+
+        return None
+
+    def _should_include_path(self, bundle_path: Path) -> bool:
+        """Determine if a bundle path should be included based on ignore and specific paths."""
+        return not any(
+            re.match(pattern, str(bundle_path)) for pattern in self.ignore_paths
+        ) and (not self.specific_paths or bundle_path in self.specific_paths)
+
+
+if __name__ == "__main__":
+    # Test code
+    test_ignores: List[str] = ["aufx/DLSMusicDevice", "aufx/SomeOtherPluginToIgnore"]
+    scanner = AUScanner(ignore_paths=test_ignores)
+
+    print("--- Finding all AU plugins ---")
+    plugin_files = scanner.find_plugin_files()
+    for plugin_file in plugin_files:
+        print(f"Found plugin: {plugin_file}")
+
+        # Try to scan the plugin
+        plugin_info = scanner.scan_plugin(plugin_file)
+        if plugin_info:
+            print(f"  Name: {plugin_info.name}")
+            print(f"  Manufacturer: {plugin_info.manufacturer}")
+            print(f"  Type: {plugin_info.plugin_type}")
+            print(f"  ID: {plugin_info.id}")
+            print()
+
+    # Example Usage (macOS only)
+    if platform.system() == "Darwin":
+        logging.basicConfig(level=logging.DEBUG)
+        # Dummy ignores for testing
+        test_ignores: Set[str] = {"aufx/DLSMusicDevice", "aufx/SomeOtherPluginToIgnore"}
+
+        scanner = AUScanner(ignore_paths=test_ignores)
+
+        print("--- Finding all AU plugins ---")
+        all_au_plugins = scanner.find_plugin_files()
+        for p_path in all_au_plugins:
+            print(p_path)
+
+        # Example with specific paths (if you knew some paths to filter by)
+        # print("\n--- Finding specific AU plugins (example, replace with actual paths) ---")
+        # specific_paths_to_check = [
+        #     Path("/Library/Audio/Plug-Ins/Components/AUNewPitch.component"),
+        #     Path("/path/to/nonexistent.component") # Example non-existent
+        # ]
+        # filtered_au_plugins = scanner.find_plugin_files(plugin_paths=specific_paths_to_check)
+        # for p_path in filtered_au_plugins:
+        #     print(p_path)
+    else:
+        print("AU scanning example is for macOS only.")
+</file>
+
+<file path="src/pedalboard_pluginary/scanners/vst3_scanner.py">
+# pedalboard_pluginary/scanners/vst3_scanner.py
+"""
+Handles scanning of VST3 plugins.
+"""
+
+import itertools
+import logging
 import os
-from pedalboard_pluginary.data import get_cache_path
-from unittest.mock import patch
+import platform
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
-def test_get_cache_path_windows():
-    with patch.dict(os.environ, {"APPDATA": "C:\\Users\\TestUser\\AppData"}):
-        path = get_cache_path("test_cache")
-        assert str(path) == "C:\\Users\\TestUser\\AppData\\com.twardoch.pedalboard-pluginary\\test_cache.json"
+from ..models import PluginInfo
+from ..scanner import BaseScanner
 
-def test_get_cache_path_non_windows():
-    with patch.dict(os.environ, {}, clear=True):
-        path = get_cache_path("test_cache")
-        home = os.path.expanduser("~")
-        expected_path = f"{home}/Library/Application Support/com.twardoch.pedalboard-pluginary/test_cache.json"
-        assert str(path) == expected_path
+# Assuming models.py will be created with PluginInfo, PluginParameter
+# from ..models import PluginInfo, PluginParameter
+# For now, using Dict[str, Any] as placeholder
+PluginDict = Dict[str, Any]
+ParamDict = Dict[str, Any]  # Replace Any with Union[float, bool, str] later
+
+logger = logging.getLogger(__name__)
+
+
+class VST3Scanner(BaseScanner):
+    """Scans VST3 plugins."""
+
+    def __init__(
+        self,
+        ignore_paths: Optional[List[str]] = None,
+        specific_paths: Optional[List[str]] = None,
+    ):
+        """Initialize the VST3 scanner with optional ignore paths and specific paths."""
+        super().__init__(ignore_paths, specific_paths)
+
+    def _get_default_vst3_folders(self) -> List[Path]:
+        """Gets standard VST3 plugin folders for the current OS."""
+        os_name: str = platform.system()
+        folders: List[Path] = []
+
+        program_files = os.getenv("ProgramFiles", "C:\\Program Files")
+        program_files_x86 = os.getenv("ProgramFiles(x86)", "C:\\Program Files (x86)")
+
+        if os_name == "Windows":
+            folders = [
+                Path(program_files) / "Common Files" / "VST3",
+                Path(program_files_x86) / "Common Files" / "VST3",
+            ]
+        elif os_name == "Darwin":  # macOS
+            folders = [
+                Path("~/Library/Audio/Plug-Ins/VST3").expanduser(),
+                Path("/Library/Audio/Plug-Ins/VST3"),
+            ]
+        elif os_name == "Linux":
+            # Standard VST3 paths on Linux
+            # See: https://steinbergmedia.github.io/vst3_dev_portal/pages/Technical+Documentation/Locations+Format/Plugin+Locations.html
+            folders = [
+                Path("~/.vst3").expanduser(),  # User specific
+                Path("/usr/lib/vst3"),  # System wide
+                Path("/usr/local/lib/vst3"),  # System wide (alternative)
+            ]
+
+        return [
+            folder.resolve()
+            for folder in folders
+            if folder.exists() and folder.is_dir()
+        ]
+
+    def find_plugin_files(self) -> List[Path]:
+        """Find all VST3 plugin files."""
+        vst3_plugin_files: List[Path] = []
+        plugin_type: str = "vst3"
+
+        # Discover plugins in standard folders
+        all_folders_to_search = self._get_default_vst3_folders()
+
+        if not all_folders_to_search:
+            logger.warning("No VST3 search folders found.")
+            return []
+
+        logger.info(f"Searching for VST3 plugins in: {all_folders_to_search}")
+
+        # Using set to avoid adding same path multiple times if folders overlap or symlinked
+        discovered_plugin_path_set = set()
+        for folder in all_folders_to_search:
+            for item in folder.glob(f"*.{plugin_type}"):
+                if item.is_file() and self._should_include_path(
+                    item
+                ):  # Ensure it's a file and not ignored
+                    discovered_plugin_path_set.add(item.resolve())
+
+        vst3_plugin_files = sorted(list(discovered_plugin_path_set))
+        logger.info(f"Found {len(vst3_plugin_files)} VST3 plugin files to consider.")
+        return vst3_plugin_files
+
+    def scan_plugin(self, plugin_path: Path) -> Optional[PluginInfo]:
+        """Scan a VST3 plugin and return its information."""
+        if not plugin_path.exists() or plugin_path.suffix != ".vst3":
+            return None
+
+        try:
+            # For now, just return basic info since we can't get more without loading the plugin
+            return PluginInfo(
+                id=f"vst3/{plugin_path.stem}",
+                name=plugin_path.stem,
+                path=str(plugin_path),
+                filename=plugin_path.name,
+                plugin_type="vst3",
+            )
+        except Exception as e:
+            logger.error(f"Error scanning VST3 plugin {plugin_path}: {e}")
+            return None
+
+    def _should_include_path(self, plugin_path: Path) -> bool:
+        """Determine if a plugin path should be included based on ignore and specific paths."""
+        return not any(
+            re.match(pattern, str(plugin_path)) for pattern in self.ignore_paths
+        ) and (not self.specific_paths or plugin_path in self.specific_paths)
+
+
+if __name__ == "__main__":
+    # Example Usage
+    logging.basicConfig(level=logging.DEBUG)
+    # Dummy ignores for testing
+    test_ignores: List[str] = ["vst3/IgnoredPlugin", "vst3/AnotherOne"]
+
+    scanner = VST3Scanner(ignore_paths=test_ignores)
+
+    print("--- Finding VST3 plugins in default locations ---")
+    default_vst3_plugins = scanner.find_plugin_files()
+    for p_path in default_vst3_plugins:
+        print(p_path)
+
+    # Example with extra folders (create dummy folders and .vst3 files to test)
+    # Create dummy folders and files for testing this part:
+    # Path("temp_vst3_folder1").mkdir(exist_ok=True)
+    # Path("temp_vst3_folder1/TestPlugin1.vst3").touch()
+    # Path("temp_vst3_folder2").mkdir(exist_ok=True)
+    # Path("temp_vst3_folder2/TestPlugin2.vst3").touch()
+    # Path("temp_vst3_folder2/IgnoredPlugin.vst3").touch() # This one should be ignored
+
+    # print("\n--- Finding VST3 plugins with extra folders ---")
+    # extra_plugin_folders = ["temp_vst3_folder1", str(Path("temp_vst3_folder2").resolve())]
+    # plugins_with_extra = scanner.find_plugin_files(extra_folders=extra_plugin_folders)
+    # for p_path in plugins_with_extra:
+    #     print(p_path)
+
+    # print("\n--- Finding specific VST3 plugins by path ---")
+    # specific_paths = [Path("temp_vst3_folder1/TestPlugin1.vst3")]
+    # if Path("temp_vst3_folder2/IgnoredPlugin.vst3").exists(): # Check if dummy file exists
+    #     specific_paths.append(Path("temp_vst3_folder2/IgnoredPlugin.vst3")) # Should be ignored by name
+    # specific_plugins = scanner.find_plugin_files(plugin_paths=specific_paths)
+    # for p_path in specific_plugins:
+    #     print(p_path)
+
+    # Cleanup dummy folders (optional)
+    # import shutil
+    # if Path("temp_vst3_folder1").exists(): shutil.rmtree("temp_vst3_folder1")
+    # if Path("temp_vst3_folder2").exists(): shutil.rmtree("temp_vst3_folder2")
+</file>
+
+<file path="src/pedalboard_pluginary/models.py">
+# pedalboard_pluginary/models.py
+"""
+Dataclasses for representing plugin information.
+"""
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Union, Dict, Optional, Any
+
+# ParameterValue is what we store (after conversion from pedalboard's raw param value)
+ParameterValue = Union[float, bool, str]
+
+@dataclass
+class PluginParameter:
+    """Represents a single parameter of a plugin."""
+    name: str
+    value: ParameterValue
+    # Optional: Add other attributes like min_value, max_value, string_value, etc.
+    # if Pedalboard consistently provides them and they are useful to store.
+    # For now, keeping it simple with just name and current (default) value.
+    # raw_pedalboard_value: Any # Could store the original pedalboard value if needed for debugging
+
+@dataclass
+class PluginInfo:
+    """Represents a scanned audio plugin."""
+    # Unique key for this plugin, e.g., "vst3/FabFilter Pro-Q 3" or "aufx/ChannelEQ"
+    # This key might be different from `name` if a file contains multiple plugins or
+    # if the user-facing name has characters not suitable for a key.
+    # This will be the key in the main dictionary of plugins.
+    id: str
+
+    name: str # The display name of the plugin
+    path: str # Path to the plugin file or bundle (as string for JSON serialization)
+    filename: str # Filename of the plugin (e.g., "FabFilter Pro-Q 3.vst3")
+    plugin_type: str # "vst3" or "aufx"
+
+    # Parameters: dict where key is param name, value is PluginParameter object
+    parameters: Dict[str, PluginParameter] = field(default_factory=dict)
+
+    manufacturer: Optional[str] = None # Optional: Plugin manufacturer name
+
+    # Optional: If a plugin file (e.g. VST3) can contain multiple uniquely identifiable
+    # plugins, this field could store the specific name used to load this plugin
+    # from the file, if different from the main `name`.
+    # E.g. `pedalboard.load_plugin(path, plugin_name=name_in_file)`
+    name_in_file: Optional[str] = None
+
+    def __post_init__(self):
+        # Ensure path is stored as a string for easier JSON serialization
+        if isinstance(self.path, Path):
+            self.path = str(self.path)
+
+    # Consider adding methods for to_dict/from_dict if needed for complex serialization,
+    # though dataclasses.asdict and direct instantiation usually suffice.
+
+# Example usage:
+# if __name__ == "__main__":
+#     eq_param = PluginParameter(name="Frequency", value=1000.0)
+#     gain_param = PluginParameter(name="Gain", value=0.0)
+#     bypass_param = PluginParameter(name="Bypass", value=False)
+
+#     example_plugin = PluginInfo(
+#         id="vst3/AwesomeEQ",
+#         name="Awesome EQ",
+#         path="/path/to/AwesomeEQ.vst3",
+#         filename="AwesomeEQ.vst3",
+#         plugin_type="vst3",
+#         parameters={
+#             "Frequency": eq_param,
+#             "Gain": gain_param,
+#             "Bypass": bypass_param
+#         },
+#         manufacturer="MyPluginCompany"
+#     )
+#     import json
+#     from dataclasses import asdict
+#     print(json.dumps(asdict(example_plugin), indent=2))
+</file>
+
+<file path="tests/scanners/__init__.py">
+# tests/scanners/__init__.py
+# This file makes Python treat the `tests/scanners` directory as a package.
+</file>
+
+<file path="tests/scanners/test_au_scanner.py">
+# tests/scanners/test_au_scanner.py
+import os
+import platform
+import pytest
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+from pedalboard_pluginary.scanners.au_scanner import AUScanner
+
+# Sample auval output
+AUVAL_OUTPUT_VALID = """
+ Westwood AU Test
+--------------------------------------------------
+AUVALTOOL Discount AU
+--------------------------------------------------
+PLAYER version 2.0.13 (build 17)
+--------------------------------------------------
+VALIDATING AUDIO UNIT: 'aufx' - 'dely' - 'appl'
+--------------------------------------------------
+Manufacturer String: Apple
+AudioUnit Name: AUDelay
+Component Version: 1.7.0
+Component Bundle Path: /Library/Audio/Plug-Ins/Components/AUDelay.component
+Component AU Path: /Library/Audio/Plug-Ins/Components/AUDelay.component/Contents/MacOS/AUDelay
+
+* * PASS
+--------------------------------------------------
+VALIDATING AUDIO UNIT: 'aufx' - 'mcmp' - 'appl'
+--------------------------------------------------
+Manufacturer String: Apple
+AudioUnit Name: AUMultibandCompressor
+Component Version: 1.7.0
+Component Bundle Path: /Library/Audio/Plug-Ins/Components/AUMultibandCompressor.component
+Component AU Path: /Library/Audio/Plug-Ins/Components/AUMultibandCompressor.component/Contents/MacOS/AUMultibandCompressor
+
+* * PASS
+--------------------------------------------------
+VALIDATING AUDIO UNIT: 'aumf' - 'dls ' - 'appl'
+--------------------------------------------------
+Manufacturer String: Apple
+AudioUnit Name: DLSMusicDevice
+Component Version: 1.7.0
+Component Bundle Path: /Library/Audio/Plug-Ins/Components/DLSMusicDevice.component
+Component AU Path: /Library/Audio/Plug-Ins/Components/DLSMusicDevice.component/Contents/MacOS/DLSMusicDevice
+
+* * PASS
+--------------------------------------------------
+TESTING OPEN TIMES:
+COLD:
+Time to open AudioUnit:      21.112 ms
+WARM:
+Time to open AudioUnit:      0.042  ms
+This AudioUnit is a version 3 implementation.
+FIRST TIME:
+FATAL ERROR: Initialize: result: -50
+
+
+--------------------------------------------------
+AU VALIDATION SUCCEEDED.
+--------------------------------------------------
+"""
+
+AUVAL_OUTPUT_GARBAGE_URL = """
+ Westwood AU Test
+--------------------------------------------------
+VALIDATING AUDIO UNIT: 'aufx' - 'xxxx' - 'test'
+--------------------------------------------------
+Manufacturer String: Test Inc
+AudioUnit Name: BadURLPlugin
+Component Version: 1.0.0
+Component Bundle Path: /path/to/plugin with spaces.component
+Component AU Path: (null)
+
+* * PASS
+--------------------------------------------------
+AU VALIDATION SUCCEEDED.
+--------------------------------------------------
+"""
+
+
+@pytest.fixture
+def au_scanner_instance():
+    return AUScanner(ignores=set())
+
+@pytest.fixture
+def au_scanner_with_ignores_instance():
+    return AUScanner(ignores={"aufx/DLSMusicDevice"}) # Key is type/stem
+
+@patch('platform.system', return_value='Darwin') # Assume macOS for these tests
+class TestAUScanner:
+
+    @patch('subprocess.run')
+    def test_list_aufx_plugins_raw_success(self, mock_subprocess_run, au_scanner_instance):
+        mock_process = MagicMock()
+        mock_process.stdout = AUVAL_OUTPUT_VALID
+        mock_subprocess_run.return_value = mock_process
+
+        lines = au_scanner_instance._list_aufx_plugins_raw()
+        assert len(lines) > 0
+        assert "AUDelay" in AUVAL_OUTPUT_VALID
+        mock_subprocess_run.assert_called_once_with(
+            ["auval", "-l"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=True,
+        )
+
+    @patch('subprocess.run', side_effect=FileNotFoundError("auval not found"))
+    def test_list_aufx_plugins_raw_auval_not_found(self, mock_subprocess_run, au_scanner_instance):
+        lines = au_scanner_instance._list_aufx_plugins_raw()
+        assert lines == []
+
+    @patch('subprocess.run')
+    def test_find_plugin_files_valid_output(self, mock_subprocess_run, au_scanner_instance):
+        mock_process = MagicMock()
+        mock_process.stdout = AUVAL_OUTPUT_VALID
+        mock_subprocess_run.return_value = mock_process
+
+        # Mock Path.resolve() and Path.exists() for paths found by auval
+        with patch.object(Path, 'resolve') as mock_resolve, \
+             patch.object(Path, 'exists', return_value=True) as mock_exists:
+
+            # Make resolve return a Path object that can be further manipulated if needed
+            # and also has an 'exists' method.
+            def side_effect_resolve(*args, **kwargs):
+                # The input to resolve is the path string from auval output
+                # e.g., Path("/Library/Audio/Plug-Ins/Components/AUDelay.component")
+                # We want it to return itself basically, but as a mock if needed for exists()
+                p = Path(*args) # Reconstruct the original path
+                # Mock the exists for this specific path if needed, though global mock_exists might cover it
+                # For bundle path logic, ensure suffix is checked on original path.
+                return p
+            mock_resolve.side_effect = side_effect_resolve
+
+            plugin_files = au_scanner_instance.find_plugin_files()
+
+            assert len(plugin_files) == 3 # AUDelay, AUMultibandCompressor, DLSMusicDevice
+            expected_paths = [
+                Path("/Library/Audio/Plug-Ins/Components/AUDelay.component"),
+                Path("/Library/Audio/Plug-Ins/Components/AUMultibandCompressor.component"),
+                Path("/Library/Audio/Plug-Ins/Components/DLSMusicDevice.component"),
+            ]
+            for p in expected_paths:
+                assert p.resolve() in plugin_files # Comparing resolved paths
+
+    @patch('subprocess.run')
+    def test_find_plugin_files_with_ignores(self, mock_subprocess_run, au_scanner_with_ignores_instance):
+        mock_process = MagicMock()
+        mock_process.stdout = AUVAL_OUTPUT_VALID
+        mock_subprocess_run.return_value = mock_process
+
+        with patch.object(Path, 'resolve', side_effect=lambda p: Path(p)), \
+             patch.object(Path, 'exists', return_value=True):
+            plugin_files = au_scanner_with_ignores_instance.find_plugin_files()
+
+            # DLSMusicDevice should be ignored
+            assert len(plugin_files) == 2
+            ignored_path = Path("/Library/Audio/Plug-Ins/Components/DLSMusicDevice.component").resolve()
+            assert ignored_path not in plugin_files
+            delay_path = Path("/Library/Audio/Plug-Ins/Components/AUDelay.component").resolve()
+            assert delay_path in plugin_files
+
+
+    @patch('subprocess.run')
+    def test_find_plugin_files_garbage_url(self, mock_subprocess_run, au_scanner_instance):
+        mock_process = MagicMock()
+        mock_process.stdout = AUVAL_OUTPUT_GARBAGE_URL # Contains (null) URL
+        mock_subprocess_run.return_value = mock_process
+
+        with patch.object(Path, 'resolve', side_effect=lambda p: Path(p) if p else None), \
+             patch.object(Path, 'exists', return_value=True):
+            plugin_files = au_scanner_instance.find_plugin_files()
+            assert len(plugin_files) == 0 # Should skip the one with (null) URL
+
+    @patch('platform.system', return_value='Linux') # Test non-Darwin platform
+    def test_scanner_on_non_macos(self, mock_platform_system_linux, au_scanner_instance):
+        assert au_scanner_instance._list_aufx_plugins_raw() == []
+        assert au_scanner_instance.find_plugin_files() == []
+
+    @patch('subprocess.run')
+    def test_find_plugin_files_with_specific_paths_filter(self, mock_subprocess_run, au_scanner_instance):
+        mock_process = MagicMock()
+        mock_process.stdout = AUVAL_OUTPUT_VALID
+        mock_subprocess_run.return_value = mock_process
+
+        # User wants to check only AUDelay
+        specific_paths_to_check = [Path("/Library/Audio/Plug-Ins/Components/AUDelay.component")]
+
+        with patch.object(Path, 'resolve', side_effect=lambda p: Path(p)), \
+             patch.object(Path, 'exists', return_value=True):
+            plugin_files = au_scanner_instance.find_plugin_files(plugin_paths=specific_paths_to_check)
+
+            assert len(plugin_files) == 1
+            assert Path("/Library/Audio/Plug-Ins/Components/AUDelay.component").resolve() in plugin_files
+
+    # Test for bundle path resolution logic
+    # This requires more intricate mocking of Path objects if we don't want to rely on filesystem
+    @patch('subprocess.run')
+    def test_bundle_path_resolution(self, mock_subprocess_run, au_scanner_instance):
+        # Simulate auval output where path is deep inside the bundle
+        deep_path_auval_output = """
+        VALIDATING AUDIO UNIT: 'aufx' - 'test' - 'tstc'
+        --------------------------------------------------
+        Manufacturer String: TestCompany
+        AudioUnit Name: DeepTestPlugin
+        Component Version: 1.0.0
+        Component Bundle Path: /Some/Path/DeepTestPlugin.component/Contents/MacOS/DeepTestPlugin
+        Component AU Path: /Some/Path/DeepTestPlugin.component/Contents/MacOS/DeepTestPlugin
+        * * PASS
+        --------------------------------------------------
+        AU VALIDATION SUCCEEDED.
+        --------------------------------------------------
+        """
+        mock_process = MagicMock()
+        mock_process.stdout = deep_path_auval_output
+        mock_subprocess_run.return_value = mock_process
+
+        # We need to mock Path behavior for suffix and parent
+        # The Path object created from the string should behave as expected.
+        # No complex mocking needed if Path objects work as standard for these attributes.
+        # We only need to ensure Path.resolve and Path.exists are controlled.
+
+        with patch.object(Path, 'resolve', side_effect=lambda p: Path(p)), \
+             patch.object(Path, 'exists', return_value=True):
+
+            plugin_files = au_scanner_instance.find_plugin_files()
+
+            assert len(plugin_files) == 1
+            # The scanner should correctly identify the .component bundle path
+            expected_bundle_path = Path("/Some/Path/DeepTestPlugin.component").resolve()
+            assert expected_bundle_path in plugin_files
+
+# TODO: Add tests for error conditions in auval (e.g., CalledProcessError)
+# TODO: Add tests for when Path.resolve() or other Path operations raise exceptions
+# (though these are less likely for valid path strings)
+</file>
+
+<file path="tests/scanners/test_vst3_scanner.py">
+# tests/scanners/test_vst3_scanner.py
+import os
+import platform
+from pathlib import Path
+from unittest.mock import MagicMock, mock_open, patch
+
+import pytest
+
+from pedalboard_pluginary.scanners.vst3_scanner import VST3Scanner
+
+
+# Helper to create dummy VST3 files and folders
+def create_dummy_vst3_structure(tmp_path, structure):
+    """
+    Creates a dummy VST3 plugin directory structure.
+    structure is a dict like:
+    {
+        "folder_name": ["plugin1.vst3", "plugin2.vst3", {"subfolder": ["plugin3.vst3"]}]
+    }
+    """
+    for name, contents in structure.items():
+        current_path = tmp_path / name
+        current_path.mkdir(parents=True, exist_ok=True)
+        for item in contents:
+            if isinstance(item, str):  # It's a file
+                (current_path / item).touch()
+            elif isinstance(item, dict):  # It's a sub-structure
+                create_dummy_vst3_structure(current_path, item)
+
+
+@pytest.fixture
+def vst3_scanner_instance():
+    return VST3Scanner()
+
+
+@pytest.fixture
+def vst3_scanner_with_ignores_instance():
+    return VST3Scanner(ignore_paths=["vst3/IgnoredPlugin"])
+
+
+class TestVST3Scanner:
+    @patch("platform.system", return_value="Windows")
+    @patch.dict(
+        os.environ,
+        {
+            "ProgramFiles": "C:\\Program Files",
+            "ProgramFiles(x86)": "C:\\Program Files (x86)",
+        },
+    )
+    def test_get_default_vst3_folders_windows(
+        self, mock_platform_system, vst3_scanner_instance, tmp_path
+    ):
+        # Create dummy common VST3 folders for Windows
+        win_vst3_path1 = tmp_path / "Program Files" / "Common Files" / "VST3"
+        win_vst3_path1.mkdir(parents=True, exist_ok=True)
+        win_vst3_path2 = tmp_path / "Program Files (x86)" / "Common Files" / "VST3"
+        win_vst3_path2.mkdir(parents=True, exist_ok=True)
+
+        # Patch os.getenv to return mocked ProgramFiles paths relative to tmp_path
+        def mock_getenv_windows(var_name, default=None):
+            if var_name == "ProgramFiles":
+                return str(tmp_path / "Program Files")
+            if var_name == "ProgramFiles(x86)":
+                return str(tmp_path / "Program Files (x86)")
+            return default
+
+        with patch("os.getenv", side_effect=mock_getenv_windows):
+            folders = vst3_scanner_instance._get_default_vst3_folders()
+            assert Path(win_vst3_path1).resolve() in folders
+            assert Path(win_vst3_path2).resolve() in folders
+
+    @patch("platform.system", return_value="Darwin")
+    def test_get_default_vst3_folders_macos(
+        self, mock_platform_system, vst3_scanner_instance, tmp_path
+    ):
+        mac_vst3_path1 = tmp_path / "Library" / "Audio" / "Plug-Ins" / "VST3"  # System
+        mac_vst3_path1.mkdir(parents=True, exist_ok=True)
+        # User path needs to be mocked for expanduser
+        user_home_vst3_path = (
+            tmp_path / "Users" / "testuser" / "Library" / "Audio" / "Plug-Ins" / "VST3"
+        )
+        user_home_vst3_path.mkdir(parents=True, exist_ok=True)
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path / "Users" / "testuser"),
+            patch(
+                "pathlib.Path.expanduser",
+                side_effect=lambda p: p
+                if not str(p).startswith("~")
+                else user_home_vst3_path,
+            ),
+        ):
+            # Mock /Library path to point to our tmp_path version
+            original_path_init = Path.__init__
+
+            def mocked_path_init(self, *args, **kwargs):
+                if args and args[0] == "/Library/Audio/Plug-Ins/VST3":
+                    args = (str(mac_vst3_path1),) + args[1:]
+                original_path_init(self, *args, **kwargs)
+
+            with patch("pathlib.Path.__init__", mocked_path_init):
+                folders = vst3_scanner_instance._get_default_vst3_folders()
+                assert user_home_vst3_path.resolve() in folders
+                assert mac_vst3_path1.resolve() in folders
+
+    @patch("platform.system", return_value="Linux")
+    def test_get_default_vst3_folders_linux(
+        self, mock_platform_system, vst3_scanner_instance, tmp_path
+    ):
+        linux_vst3_path1 = tmp_path / ".vst3"  # User
+        linux_vst3_path1.mkdir(parents=True, exist_ok=True)
+        linux_vst3_path2 = tmp_path / "usr" / "lib" / "vst3"  # System
+        linux_vst3_path2.mkdir(parents=True, exist_ok=True)
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch(
+                "pathlib.Path.expanduser",
+                side_effect=lambda p: p
+                if not str(p).startswith("~")
+                else linux_vst3_path1,
+            ),
+        ):
+            # Mock /usr/lib/vst3 to point to our tmp_path version
+            original_path_init = Path.__init__
+
+            def mocked_path_init(self, *args, **kwargs):
+                if args and args[0] == "/usr/lib/vst3":
+                    args = (str(linux_vst3_path2),) + args[1:]
+                elif (
+                    args and args[0] == "/usr/local/lib/vst3"
+                ):  # Also mock this common path
+                    args = (str(tmp_path / "usr" / "local" / "lib" / "vst3"),) + args[
+                        1:
+                    ]
+                    (tmp_path / "usr" / "local" / "lib" / "vst3").mkdir(
+                        parents=True, exist_ok=True
+                    )
+
+                original_path_init(self, *args, **kwargs)
+
+            with patch("pathlib.Path.__init__", mocked_path_init):
+                folders = vst3_scanner_instance._get_default_vst3_folders()
+                assert linux_vst3_path1.resolve() in folders
+                assert linux_vst3_path2.resolve() in folders
+
+    def test_find_plugin_files_discovery(self, vst3_scanner_instance, tmp_path):
+        # Create a dummy default folder and put some plugins in it
+        default_folder = tmp_path / "DefaultVST3s"
+        default_folder.mkdir()
+        (default_folder / "PluginA.vst3").touch()
+        (default_folder / "PluginB.vst3").touch()
+
+        with patch.object(
+            VST3Scanner, "_get_default_vst3_folders", return_value=[default_folder]
+        ):
+            found_plugins = vst3_scanner_instance.find_plugin_files()
+            assert len(found_plugins) == 2
+            assert default_folder / "PluginA.vst3" in found_plugins
+            assert default_folder / "PluginB.vst3" in found_plugins
+
+    def test_find_plugin_files_with_extra_folders(
+        self, vst3_scanner_instance, tmp_path
+    ):
+        extra_folder1 = tmp_path / "ExtraVST3s1"
+        extra_folder1.mkdir()
+        (extra_folder1 / "PluginC.vst3").touch()
+
+        extra_folder2 = tmp_path / "ExtraVST3s2"  # Non-existent
+
+        # Mock default folders to be empty to isolate test to extra_folders
+        with patch.object(VST3Scanner, "_get_default_vst3_folders", return_value=[]):
+            found_plugins = vst3_scanner_instance.find_plugin_files(
+                extra_folders=[str(extra_folder1), str(extra_folder2)]
+            )
+            assert len(found_plugins) == 1
+            assert extra_folder1 / "PluginC.vst3" in found_plugins
+
+    def test_find_plugin_files_with_specific_paths(
+        self, vst3_scanner_instance, tmp_path
+    ):
+        plugin_path1 = tmp_path / "SpecificPlugin1.vst3"
+        plugin_path1.touch()
+        plugin_path2 = tmp_path / "SpecificPlugin2.vst3"  # Non-existent for this call
+
+        found_plugins = vst3_scanner_instance.find_plugin_files(
+            plugin_paths=[plugin_path1, plugin_path2]
+        )
+        assert len(found_plugins) == 1
+        assert (
+            plugin_path1 in found_plugins
+        )  # plugin_path2 should not be found as it doesn't exist yet
+
+    def test_find_plugin_files_with_ignores(
+        self, vst3_scanner_with_ignores_instance, tmp_path
+    ):
+        default_folder = tmp_path / "VST3WithIgnores"
+        default_folder.mkdir()
+        (default_folder / "NormalPlugin.vst3").touch()
+        (
+            default_folder / "IgnoredPlugin.vst3"
+        ).touch()  # This one has stem "IgnoredPlugin"
+
+        with patch.object(
+            VST3Scanner, "_get_default_vst3_folders", return_value=[default_folder]
+        ):
+            found_plugins = vst3_scanner_with_ignores_instance.find_plugin_files()
+            assert len(found_plugins) == 1
+            assert default_folder / "NormalPlugin.vst3" in found_plugins
+            assert default_folder / "IgnoredPlugin.vst3" not in found_plugins
+
+    def test_find_plugin_files_no_folders_exist(self, vst3_scanner_instance):
+        with patch.object(VST3Scanner, "_get_default_vst3_folders", return_value=[]):
+            found_plugins = vst3_scanner_instance.find_plugin_files()
+            assert len(found_plugins) == 0
+
+    def test_find_plugin_files_skips_directories_with_vst3_suffix(
+        self, vst3_scanner_instance, tmp_path
+    ):
+        default_folder = tmp_path / "VST3WithDirs"
+        default_folder.mkdir()
+        (default_folder / "RealPlugin.vst3").touch()
+        (default_folder / "FakePlugin.vst3").mkdir()  # A directory named like a plugin
+
+        with patch.object(
+            VST3Scanner, "_get_default_vst3_folders", return_value=[default_folder]
+        ):
+            found_plugins = vst3_scanner_instance.find_plugin_files()
+            assert len(found_plugins) == 1
+            assert default_folder / "RealPlugin.vst3" in found_plugins
+            assert default_folder / "FakePlugin.vst3" not in found_plugins
+
+
+# TODO: Test case where a plugin_path provided to find_plugin_files is a directory (should be ignored)
+# TODO: Test case with symlinks if relevant (Path.resolve() should handle them, but good to be aware)
+# TODO: Test case for duplicate plugin paths from overlapping folder definitions (should be unique)
+#       (find_plugin_files uses a set internally for discovery before sorting, so this should be handled)
+</file>
+
+<file path="tests/test_cli.py">
+# tests/test_cli.py
+import os
+import subprocess
+import json
+import yaml
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+import pytest
+
+from pedalboard_pluginary.data import APP_NAME, PLUGINS_CACHE_FILENAME_BASE, get_cache_path
+
+# Helper to get the cache file path for plugins
+def get_plugins_cache_file():
+    return get_cache_path(PLUGINS_CACHE_FILENAME_BASE)
+
+@pytest.fixture(autouse=True)
+def manage_plugin_cache():
+    """Fixture to ensure plugin cache is handled before and after tests."""
+    cache_file = get_plugins_cache_file()
+    original_content = None
+
+    if cache_file.exists():
+        original_content = cache_file.read_text()
+        cache_file.unlink() # Remove before test
+
+    yield # Test runs here
+
+    # Cleanup: remove cache file created by test, or restore original
+    if cache_file.exists():
+        cache_file.unlink()
+    if original_content:
+        # Ensure parent directory exists before writing back
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(original_content)
+
+
+# Mocked data for PedalboardScanner.scan_all_plugins and load_json_file
+# This data will be "written" by the mocked scan and "read" by list/json/yaml
+MOCK_PLUGIN_DATA = {
+    "vst3/MockSynth": {
+        "id": "vst3/MockSynth",
+        "name": "MockSynth",
+        "path": "/fake/path/to/MockSynth.vst3",
+        "filename": "MockSynth.vst3",
+        "plugin_type": "vst3",
+        "parameters": {
+            "Volume": {"name": "Volume", "value": 0.75},
+            "Pan": {"name": "Pan", "value": 0.0}
+        },
+        "manufacturer": "FakePlugins",
+        "name_in_file": "MockSynth"
+    },
+    "aufx/MockEffect": {
+        "id": "aufx/MockEffect",
+        "name": "MockEffect",
+        "path": "/fake/path/to/MockEffect.component",
+        "filename": "MockEffect.component",
+        "plugin_type": "aufx",
+        "parameters": {
+            "Wet/Dry": {"name": "Wet/Dry", "value": 0.5}
+        },
+        "manufacturer": "FakeAudio",
+        "name_in_file": "MockEffect"
+    }
+}
+
+# This mock will replace the actual PedalboardScanner instance or its methods
+@patch('pedalboard_pluginary.scanner.PedalboardScanner.scan_all_plugins')
+@patch('pedalboard_pluginary.scanner.PedalboardScanner.update_scan') # Also mock update_scan
+@patch('pedalboard_pluginary.scanner.PedalboardScanner.save_plugins') # Mock save_plugins
+@patch('pedalboard_pluginary.core.PedalboardPluginary.load_data') # Mock load_data in core
+def run_cli_command(
+    cli_args_list,
+    mock_core_load_data,
+    mock_scanner_save_plugins,
+    mock_scanner_update_scan,
+    mock_scanner_scan_all,
+    expected_exit_code=0
+):
+    """Helper to run CLI commands and capture output."""
+
+    # If scan or update is called, make them "create" the mock cache file
+    def side_effect_scan_or_update(*args, **kwargs):
+        cache_file = get_plugins_cache_file()
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(cache_file, 'w') as f:
+            json.dump(MOCK_PLUGIN_DATA, f, indent=4)
+        # The actual scan methods in PedalboardScanner don't return anything.
+        # They modify self.plugins and then call self.save_plugins.
+        # We've mocked save_plugins separately.
+
+    mock_scanner_scan_all.side_effect = side_effect_scan_or_update
+    mock_scanner_update_scan.side_effect = side_effect_scan_or_update
+
+    # Mock load_data to set the plugins attribute on an instance if needed,
+    # or simply prevent it from trying to load a real file during list commands
+    # if scan hasn't run.
+    # For 'list', 'json', 'yaml', the PedalboardPluginary instance will try to load.
+    # We can patch load_json_file used by PedalboardPluginary.load_data
+
+    base_command = ["pbpluginary"]
+    full_command = base_command + cli_args_list
+
+    try:
+        result = subprocess.run(full_command, capture_output=True, text=True, check=False)
+        if result.returncode != expected_exit_code:
+            print("STDOUT:", result.stdout)
+            print("STDERR:", result.stderr)
+        assert result.returncode == expected_exit_code
+        return result
+    except FileNotFoundError:
+        pytest.fail("pbpluginary command not found. Ensure it's installed and in PATH for testing.")
+
+
+# Test 'scan' command
+# Patching at the source of where PedalboardScanner is instantiated or used by CLI
+@patch('pedalboard_pluginary.__main__.PedalboardScanner')
+def test_cli_scan(MockScannerConstructor):
+    # Mock the instance methods that would be called
+    mock_scanner_instance = MockScannerConstructor.return_value
+    mock_scanner_instance.rescan.return_value = None # rescan calls full_scan which calls scan_all_plugins
+
+    # We need rescan (which is an alias for full_scan) to effectively create the cache
+    # by having its underlying scan_all_plugins call write the MOCK_PLUGIN_DATA
+    def mock_rescan_writes_cache(*args, **kwargs):
+        cache_file = get_plugins_cache_file()
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(cache_file, 'w') as f:
+            json.dump(MOCK_PLUGIN_DATA, f, indent=4)
+    mock_scanner_instance.rescan.side_effect = mock_rescan_writes_cache
+
+    result = run_cli_command(["scan"]) # Uses the patches from run_cli_command's decorators
+
+    # Check that the cache file was created with mock data
+    cache_file = get_plugins_cache_file()
+    assert cache_file.exists()
+    with open(cache_file, 'r') as f:
+        data_from_cache = json.load(f)
+    assert data_from_cache == MOCK_PLUGIN_DATA
+
+    # Check if scan method on the instance was called
+    mock_scanner_instance.rescan.assert_called_once()
+
+
+# Test 'list' command (implicitly tests JSON output)
+# For list, we need to ensure that the cache exists or that PedalboardPluginary can load it.
+# The manage_plugin_cache fixture helps here.
+# We also need to control what PedalboardPluginary.load_data does.
+@patch('pedalboard_pluginary.data.load_json_file') # Patch where load_json_file is defined
+def test_cli_list(mock_load_json, capsys):
+    # Setup: Ensure a cache file with MOCK_PLUGIN_DATA exists for 'list' to read
+    cache_file = get_plugins_cache_file()
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(cache_file, 'w') as f:
+        json.dump(MOCK_PLUGIN_DATA, f, indent=4)
+
+    # Configure the mock for load_json_file used by PedalboardPluginary
+    # It should return the MOCK_PLUGIN_DATA when the specific plugins cache path is requested
+    def side_effect_load_json(path_arg):
+        if path_arg == cache_file:
+            # Return raw dict, PedalboardPluginary.load_data will handle reconstruction
+            return MOCK_PLUGIN_DATA
+        return {} # Default for other calls
+    mock_load_json.side_effect = side_effect_load_json
+
+    # Run the 'list' command
+    # Using direct function call to avoid subprocess complexity with stdout/stderr and fire's display hook
+    from pedalboard_pluginary.__main__ import list_json_cli
+
+    # Fire's Display hook is tricky to test with subprocess.run, so call directly.
+    # list_json_cli returns a string.
+    # We need to ensure that when `pbpluginary list` is run, this function is called
+    # and its output (which is JSON string) is printed.
+    # For simplicity here, just test the function that `fire` would call.
+
+    # To test the actual CLI output, we need to let pbpluginary run as subprocess
+    # and capture stdout. This means not mocking PedalboardPluginary or its load_data directly here
+    # but ensuring the underlying data.load_json_file behaves as expected due to the patch.
+
+    result = subprocess.run(["pbpluginary", "list"], capture_output=True, text=True, check=True)
+
+    # The output should be the MOCK_PLUGIN_DATA formatted as JSON
+    # Fire wraps output, so it might not be exact JSON string if printed line-by-line.
+    # The default 'list' command in __main__.py calls bdict().to_json() and fire prints it.
+    # Let's parse the stdout.
+    try:
+        output_data = json.loads(result.stdout)
+        assert output_data == MOCK_PLUGIN_DATA
+    except json.JSONDecodeError:
+        pytest.fail(f"CLI output was not valid JSON. Output:\n{result.stdout}")
+
+
+# Test 'json' command (should be identical to 'list')
+@patch('pedalboard_pluginary.data.load_json_file')
+def test_cli_json_output(mock_load_json_for_json_cmd, capsys):
+    cache_file = get_plugins_cache_file()
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(cache_file, 'w') as f:
+        json.dump(MOCK_PLUGIN_DATA, f, indent=4)
+
+    def side_effect_load_json(path_arg):
+        if path_arg == cache_file:
+            return MOCK_PLUGIN_DATA
+        return {}
+    mock_load_json_for_json_cmd.side_effect = side_effect_load_json
+
+    result = subprocess.run(["pbpluginary", "json"], capture_output=True, text=True, check=True)
+    try:
+        output_data = json.loads(result.stdout)
+        assert output_data == MOCK_PLUGIN_DATA
+    except json.JSONDecodeError:
+        pytest.fail(f"CLI output for 'json' was not valid JSON. Output:\n{result.stdout}")
+
+
+# Test 'yaml' command
+@patch('pedalboard_pluginary.data.load_json_file')
+def test_cli_yaml_output(mock_load_json_for_yaml_cmd, capsys):
+    cache_file = get_plugins_cache_file()
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(cache_file, 'w') as f:
+        json.dump(MOCK_PLUGIN_DATA, f, indent=4)
+
+    def side_effect_load_json(path_arg):
+        if path_arg == cache_file:
+            return MOCK_PLUGIN_DATA
+        return {}
+    mock_load_json_for_yaml_cmd.side_effect = side_effect_load_json
+
+    result = subprocess.run(["pbpluginary", "yaml"], capture_output=True, text=True, check=True)
+    try:
+        # python-benedict's to_yaml output might have specific formatting.
+        # For robustness, parse it back and compare with original data.
+        output_data = yaml.safe_load(result.stdout)
+        # YAML load might produce slightly different types (e.g. list for dict items sometimes)
+        # A direct comparison MOCK_PLUGIN_DATA might be tricky if numbers are float vs int.
+        # For now, let's assume benedict produces standard YAML that converts back cleanly.
+        assert json.dumps(output_data, sort_keys=True) == json.dumps(MOCK_PLUGIN_DATA, sort_keys=True)
+    except yaml.YAMLError:
+        pytest.fail(f"CLI output for 'yaml' was not valid YAML. Output:\n{result.stdout}")
+    except Exception as e:
+        pytest.fail(f"Error comparing YAML output: {e}. Output:\n{result.stdout}")
+
+
+# Test 'update' command
+@patch('pedalboard_pluginary.__main__.PedalboardScanner')
+def test_cli_update(MockScannerConstructorForUpdate):
+    mock_scanner_instance = MockScannerConstructorForUpdate.return_value
+
+    # Simulate that update_scan effectively writes the cache
+    def mock_update_scan_writes_cache(*args, **kwargs):
+        cache_file = get_plugins_cache_file()
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        # Update might add to existing data or rescan if no cache.
+        # For this test, assume it behaves like scan if no cache.
+        with open(cache_file, 'w') as f:
+            json.dump(MOCK_PLUGIN_DATA, f, indent=4) # For simplicity, same as scan
+    mock_scanner_instance.update_scan.side_effect = mock_update_scan_writes_cache
+
+    result = run_cli_command(["update"]) # Uses patches from run_cli_command
+
+    cache_file = get_plugins_cache_file()
+    assert cache_file.exists()
+    with open(cache_file, 'r') as f:
+        data_from_cache = json.load(f)
+    assert data_from_cache == MOCK_PLUGIN_DATA # Assuming update wrote this
+
+    mock_scanner_instance.update_scan.assert_called_once()
+
+
+# TODO: Test for verbose logging options (--verbose=1, --verbose=2)
+# TODO: Test for --extra-folders option with scan and update
+# TODO: Test scan/update when cache already exists (for update's diff logic, though that's scanner internal)
+# TODO: Test error conditions (e.g., unparseable cache, permissions issues - harder to mock)
+
+# Note: The run_cli_command helper and its patches are quite broad.
+# For more targeted tests, especially for 'list', 'json', 'yaml',
+# it might be better to directly call the CLI functions from __main__.py
+# and mock their dependencies (like PedalboardPluginary instance) instead of using subprocess.
+# However, subprocess tests the actual command-line invocation.
+# The current `test_cli_list` and `test_cli_json_output`, `test_cli_yaml_output`
+# have been changed to use subprocess.run directly.
 </file>
 
 <file path="tests/test_utils.py">
@@ -207,75 +1365,10 @@ exclude_lines =
     if __name__ == .__main__.:
 </file>
 
-<file path=".gitignore">
-temp/
-
-# Temporary and binary files
-*~
-*.py[cod]
-*.so
-*.cfg
-!.isort.cfg
-!setup.cfg
-*.orig
-*.log
-*.pot
-__pycache__/*
-.cache/*
-.*.swp
-*/.ipynb_checkpoints/*
-.DS_Store
-
-# Project files
-.ropeproject
-.project
-.pydevproject
-.settings
-.idea
-.vscode
-tags
-
-# Package files
-*.egg
-*.eggs/
-.installed.cfg
-*.egg-info
-
-# Unittest and coverage
-htmlcov/*
-.coverage
-.coverage.*
-.tox
-junit*.xml
-coverage.xml
-.pytest_cache/
-
-# Build and docs folder/files
-build/*
-dist/*
-sdist/*
-docs/api/*
-docs/_rst/*
-docs/_build/*
-cover/*
-MANIFEST
-
-# Per-project virtualenvs
-.venv*/
-.conda*/
-.python-version
-</file>
-
 <file path=".isort.cfg">
 [settings]
 profile = black
 known_first_party = pedalboard_pluginary
-</file>
-
-<file path="AUTHORS.md">
-# Contributors
-
-* Adam Twardoch <adam+github@twardoch.com>
 </file>
 
 <file path="LICENSE.txt">
@@ -482,278 +1575,28 @@ Apache License
    limitations under the License.
 </file>
 
-<file path="README.md">
-# Pedalboard Pluginary
-
-_Pedalboard Pluginary_ is an independent Python-based package and command-line tool that scans and lists VST-3 plugins on macOS and Windows, and Audio Unit (AU) plugins on macOS. It’s intended as a companion for the _[Pedalboard](https://github.com/spotify/pedalboard)_ Python library by Spotify, but it’s not affiliated with _Pedalboard_ or Spotify.
-
-## Features
-
-With _Pedalboard Pluginary_, you can scan and list VST-3 and AU audio plugins installed on your machine, including their default parameters.
-
-- It automatically scans and catalogs VST-3 and AU plugins installed on your system.
-- Provides a command-line interface (CLI) for quick access to your plugin library.
-- Saves the plugin information in a JSON file. This file has the information about the plugin parameters and their default values.
-- Works on Windows and macOS (Windows is currently untested).
-- It bundles an `ignores.json` file, which “blacklists” some plugins that are known to cause issues with Pedalboard. It will not scan these, and will not include them in the cache. If you find that some plugins are not working with Pedalboard, you can add them to your `ignores.json` file. See “Contributing” section below.
-
-## Future plans
-
-I plan to extend the package with another functionality, “jobs”, which will allow to load a stack of plugins with their parameter values from a dictionary or JSON file, and run them in a batch using Pedalboard.
-
-## Installation
-
-To install _Pedalboard Pluginary_, run:
-
-```bash
-python3 -m pip install --upgrade pedalboard-pluginary
-```
-
-For the current development version:
-
-```bash
-python3 -m pip install --upgrade git+https://github.com/twardoch/pedalboard-pluginary
-```
-
-## Command-line usage
-
-After installation, you can use `pbpluginary` from the command line.
-
-### Commands:
-
-- `pbpluginary list` displays the plugin information stored in the cache, as a JSON. If no cache exists, it will scan your system and create the cache.
-- `pbpluginary scan` scans all available plugins, and caches the information. Run this if you’ve installed or upgraded some VST-3 or AU plugins.
-
-## Python usage
-
-You can use _Pedalboard Pluginary_ as a library in your Python scripts. Here's a quick example:
-
-```python
-from pedalboard_pluginary import PedalboardPluginary
-
-pluginary = PedalboardPluginary()
-print(pluginary.list_plugins())
-```
-
-This snippet will list all plugins that have been scanned and cached, as a JSON.
-
-## Changes
-
-- **v1.1.0**: Added `update` CLI command which only scans plugins that aren’t cached yet. Not perfect. Added `json` and `yaml` CLI commands. Additional refactorings.
-- **v1.0.0**: Initial release with basic scanning and listing of both VST-3 and AU plugins, and command-line interface for easy interaction.
-
-## License
-
-- **Pedalboard Pluginary** is written by Adam Twardoch, with assistance from GPT-4.
-- Copyright (c) 2023 Adam Twardoch.
-- Licensed under the [Apache-2.0 license](https://raw.githubusercontent.com/twardoch/pedalboard-pluginary/main/LICENSE.txt).
-- _Pedalboard Pluginary_ is not affiliated with [Pedalboard](https://github.com/spotify/pedalboard) or Spotify.
-
-## Contributing
-
-- If you encounter any issues or have suggestions, feel free to open an [issue](https://github.com/twardoch/pedalboard-pluginary/issues) on GitHub.
-- If you find that some plugins are not working with Pedalboard, open an issue that lists the key, which is the plugin type and the base filename, like `"aufx/CoreAudio"` or `"vst3/RX 10 Connect"`. You can also modify the [`default_ignores.json`](https://raw.githubusercontent.com/twardoch/pedalboard-pluginary/main/src/pedalboard_pluginary/resources/default_ignores.json) file, and submit a pull request.
-- If you want to contribute code, please open a pull request.
-</file>
-
-<file path="tox.ini">
-# Tox configuration file
-# Read more under https://tox.wiki/
-# THIS SCRIPT IS SUPPOSED TO BE AN EXAMPLE. MODIFY IT ACCORDING TO YOUR NEEDS!
-
-[tox]
-minversion = 3.24
-envlist = default
-isolated_build = True
-
-[testenv]
-description = Invoke pytest to run automated tests
-setenv =
-    TOXINIDIR = {toxinidir}
-passenv =
-    HOME
-    SETUPTOOLS_*
-extras =
-    testing
-commands =
-    pytest {posargs}
-
-# To run `tox -e lint` you need to make sure you have a
-# `.pre-commit-config.yaml` file. See https://pre-commit.com
-# [testenv:lint]
-# description = Perform static analysis and style checks
-# skip_install = True
-# deps = pre-commit
-# passenv =
-#     HOMEPATH
-#     PROGRAMDATA
-#     SETUPTOOLS_*
-# commands =
-#     pre-commit run --all-files {posargs:--show-diff-on-failure}
-
-[testenv:{build,clean}]
-description =
-    build: Build the package in isolation according to PEP517, see https://github.com/pypa/build
-    clean: Remove old distribution files and temporary build artifacts (./build and ./dist)
-skip_install = True
-changedir = {toxinidir}
-deps =
-    build: build[virtualenv]
-passenv =
-    SETUPTOOLS_*
-commands =
-    clean: python -c 'import shutil; [shutil.rmtree(p, True) for p in ("build", "dist")]'
-    clean: python -c 'import pathlib, shutil; [shutil.rmtree(p, True) for p in pathlib.Path("src").glob("*.egg-info")]'
-    build: python -m build {posargs}
-
-[testenv:publish]
-description =
-    Publish the package you have been developing to a package index server.
-    By default, it uses testpypi. If you really want to publish your package
-    to be publicly accessible in PyPI, use the `-- --repository pypi` option.
-skip_install = True
-changedir = {toxinidir}
-passenv =
-    TWINE_USERNAME
-    TWINE_PASSWORD
-    TWINE_REPOSITORY
-    TWINE_REPOSITORY_URL
-deps = twine
-commands =
-    python -m twine check dist/*
-    python -m twine upload {posargs:--repository {env:TWINE_REPOSITORY:testpypi}} dist/*
-</file>
-
-<file path="src/pedalboard_pluginary/__init__.py">
-from importlib.metadata import PackageNotFoundError, version
-
-try:
-    # Change here if project is renamed and does not equal the package name
-    dist_name = __name__
-    __version__ = version(dist_name)
-except PackageNotFoundError:  # pragma: no cover
-    __version__ = "unknown"
-finally:
-    del version, PackageNotFoundError
-
-from .core import PedalboardPluginary
-</file>
-
-<file path="src/pedalboard_pluginary/__main__.py">
-#!/usr/bin/env python3
-import fire # type: ignore[import-untyped]
-# fire library might not have complete type stubs, common to ignore if problematic for mypy.
-# Consider adding types-fire if available and it resolves issues.
-
-from typing import Optional, List, Any, Callable, Dict
-import sys # For sys.stdout in Display lambda
-
-from .core import PedalboardPluginary
-from .scanner import PedalboardScanner
-from benedict import benedict as bdict # type: ignore[import-untyped]
-# benedict might also lack stubs.
-import logging # For basicConfig
-
-# Define a more specific type for extra_folders if it's always List[str] after split
-ExtraFoldersType = Optional[List[str]]
-
-def setup_logging(verbose_level: int = 0) -> None:
-    """Configures basic logging for CLI output."""
-    # verbose_level: 0 = WARNING, 1 = INFO, 2 = DEBUG
-    log_level = logging.WARNING
-    if verbose_level == 1:
-        log_level = logging.INFO
-    elif verbose_level >= 2:
-        log_level = logging.DEBUG
-
-    # Only configure if no handlers are already set (e.g., by tests or other imports)
-    # This basicConfig will go to stderr by default for WARNING and above.
-    # For INFO, let's direct to stdout for better CLI experience.
-    if not logging.getLogger().hasHandlers():
-        if log_level <= logging.INFO:
-            # For INFO and DEBUG, use a more verbose format and stdout
-            logging.basicConfig(stream=sys.stdout, level=log_level,
-                                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        else:
-            # For WARNING, ERROR, CRITICAL, use stderr and simpler format
-            logging.basicConfig(level=log_level,
-                                format="%(levelname)s: %(name)s: %(message)s")
-
-
-def scan_plugins_cli(extra_folders: Optional[str] = None, verbose: int = 0) -> None:
-    """Scans all plugins, optionally including extra folders (comma-separated string)."""
-    folders_list: ExtraFoldersType = extra_folders.split(",") if extra_folders else None
-    # The original code passes extra_folders=None to rescan, which seems like a bug.
-    # It should pass folders_list.
-    setup_logging(verbose)
-    PedalboardScanner().rescan(extra_folders=folders_list)
-
-
-def update_plugins_cli(extra_folders: Optional[str] = None, verbose: int = 0) -> None:
-    """Updates plugin list, optionally including extra folders (comma-separated string)."""
-    setup_logging(verbose)
-    folders_list: ExtraFoldersType = extra_folders.split(",") if extra_folders else None
-    # Similar to scan_plugins, original code passes extra_folders=None to update.
-    # It should pass folders_list.
-    PedalboardScanner().update_scan(extra_folders=folders_list) # Changed to update_scan
-
-
-def list_json_cli(verbose: int = 0) -> str:
-    """Lists all plugins in JSON format."""
-    setup_logging(verbose)
-    return bdict(PedalboardPluginary().plugins).to_json()
-
-
-def list_yaml_cli(verbose: int = 0) -> str:
-    """Lists all plugins in YAML format."""
-    setup_logging(verbose)
-    return bdict(PedalboardPluginary().plugins).to_yaml()
-
-
-def main_cli() -> None: # Renamed from cli to avoid conflict if fire creates a 'cli' command
-    """Main CLI entry point. Call with --verbose=1 for INFO, --verbose=2 for DEBUG logs."""
-    # Adjusting fire.core.Display to be type-friendly if possible, or type: ignore it.
-    # The lambda itself is: `lambda lines, out: print(*lines, file=out)`
-    # `lines` is usually a tuple of strings, `out` is a file-like object.
-    display_lambda: Callable[[tuple[str, ...], Any], None] = lambda lines, out: print(*lines, file=out)
-    fire.core.Display = display_lambda # type: ignore[attr-defined]
-
-    # Fire will automatically expose methods of an object, or items in a dict.
-    # We can pass the functions directly. Fire handles the --verbose flag if it's an arg in functions.
-    fire_commands: Dict[str, Callable[..., Any]] = {
-            "scan": scan_plugins_cli,       # Connects to scan_plugins_cli(extra_folders=None, verbose=0)
-            "update": update_plugins_cli,   # Connects to update_plugins_cli(extra_folders=None, verbose=0)
-            "list": list_json_cli,          # Default 'list' command
-            "json": list_json_cli,          # Explicit 'json' command
-            "yaml": list_yaml_cli,
-        }
-    fire.Fire(fire_commands)
-
-
-if __name__ == "__main__":
-    main_cli()
-</file>
-
 <file path="src/pedalboard_pluginary/core.py">
 import json
 from pathlib import Path
-from typing import Dict, Any
-from .data import load_json_file, get_cache_path
+from typing import Any, Dict
+
+from .data import get_cache_path, load_json_file
 from .scanner import PedalboardScanner
+
 
 class PedalboardPluginary:
     plugins_path: Path
-    plugins: Dict[str, Any] # Assuming plugin names (keys) are strings
+    plugins: Dict[str, Any]  # Assuming plugin names (keys) are strings
 
     def __init__(self) -> None:
         self.plugins_path = get_cache_path("plugins")
-        self.plugins = {} # Initialize to empty dict
+        self.plugins = {}  # Initialize to empty dict
         self.load_data()
 
     def load_data(self) -> None:
         if not self.plugins_path.exists():
             scanner = PedalboardScanner()
-            scanner.scan() # This will create and save the plugins file
+            scanner.full_scan()  # Updated to use full_scan instead of scan
 
         # Ensure plugins are loaded even if scan wasn't needed or if it just ran
         # load_json_file returns Dict[Any, Any], but we expect Dict[str, Any] for plugins
@@ -764,7 +1607,6 @@ class PedalboardPluginary:
             # This case should ideally not happen if save_json_file and load_json_file are robust
             self.plugins = {}
 
-
     def list_plugins(self) -> str:
         """Returns a JSON string representation of the plugins."""
         return json.dumps(self.plugins, indent=4)
@@ -773,486 +1615,254 @@ class PedalboardPluginary:
 <file path="src/pedalboard_pluginary/data.py">
 import json
 import os
+import platform  # Added
 import shutil
+from importlib import resources
 from pathlib import Path
-from typing import Any, Dict, List, Set
-from pkg_resources import resource_filename # type: ignore[import-untyped]
-# Mypy might complain about pkg_resources not having stubs or being untyped.
-# If official stubs (e.g., types-setuptools) don't cover it well,
-# a type: ignore might be necessary for this line in a strict mypy environment.
-# For now, assuming it might need an ignore or that types-setuptools covers it.
+from typing import Any, Dict, List, Optional, Set, Union
 
+from .models import PluginInfo, PluginParameter  # Added
+
+# pkg_resources import removed, will rely on importlib.resources primarily.
+# Fallback block for pkg_resources in copy_default_ignores will try to use it
+# and handle NameError if it's not available.
 from .utils import ensure_folder
 
 APP_NAME: str = "com.twardoch.pedalboard-pluginary"
+PLUGINS_CACHE_FILENAME_BASE: str = "plugins"  # To identify the plugins cache file
+
 
 def get_cache_path(cache_name: str) -> Path:
-    """ Get the path to a cache file. """
-    app_data_dir: Path
-    if os.name == "nt":
+    """Get the path to a cache file."""
+    os_name = platform.system()
+    if os_name == "Windows":
         app_data_env = os.getenv("APPDATA")
         if app_data_env is None:
-            # Fallback or error if APPDATA is not set, though it usually is on Windows.
-            # For simplicity, let's assume it's set, or Path will handle it.
-            # A more robust solution would handle app_data_env being None.
-            app_data_dir = Path(os.path.expanduser("~")) / "AppData" / "Roaming" / APP_NAME
+            app_data_dir = (
+                Path(os.path.expanduser("~")) / "AppData" / "Roaming" / APP_NAME
+            )
         else:
             app_data_dir = Path(app_data_env) / APP_NAME
-    else:
-        # macOS and Linux typically use XDG Base Directory Specification or specific paths.
-        # The original code uses macOS specific path.
-        # For broader compatibility, consider XDG paths on Linux.
-        # Current implementation matches original:
+    elif os_name == "Darwin":  # macOS
         app_data_dir = Path.home() / "Library" / "Application Support" / APP_NAME
+    else:  # Linux and other Unix-like systems
+        xdg_cache_home_env = os.getenv("XDG_CACHE_HOME")
+        if xdg_cache_home_env:
+            app_data_dir = Path(xdg_cache_home_env) / APP_NAME
+        else:
+            app_data_dir = Path.home() / ".cache" / APP_NAME
 
-    app_data_dir.mkdir(parents=True, exist_ok=True) # Ensure base app dir exists
+    app_data_dir.mkdir(parents=True, exist_ok=True)  # Ensure base app dir exists
     return app_data_dir / f"{cache_name}.json"
 
-def load_json_file(file_path: Path) -> Dict[Any, Any]: # Or more specific if structure is known
-    """ Load JSON data from a file. """
-    if file_path.exists():
-        with open(file_path, 'r', encoding='utf-8') as file:
-            try:
-                return json.load(file)
-            except json.JSONDecodeError:
-                return {} # Return empty dict if JSON is corrupted
-    return {}
 
-def save_json_file(data: Dict[Any, Any], file_path: Path) -> None: # Or list/Any for data
-    """ Save JSON data to a file. """
-    ensure_folder(file_path) # Ensures parent directory exists
-    with open(file_path, 'w', encoding='utf-8') as file:
+def load_json_file(file_path: Path) -> Dict[str, Any]:
+    """Load JSON data from a file. If it's the plugins cache, reconstruct PluginInfo objects."""
+    if not file_path.exists():
+        return {}
+
+    with open(file_path, "r", encoding="utf-8") as file:
+        try:
+            raw_data = json.load(file)
+        except json.JSONDecodeError:
+            return {}  # Return empty dict if JSON is corrupted
+
+    # Check if this is the plugins cache file by its name
+    if file_path.name == f"{PLUGINS_CACHE_FILENAME_BASE}.json":
+        if not isinstance(raw_data, dict):
+            return {}  # Corrupted plugin cache
+
+        reconstructed_plugins: Dict[str, PluginInfo] = {}
+        for plugin_id, plugin_data_dict in raw_data.items():
+            if not isinstance(plugin_data_dict, dict):
+                continue  # Skip malformed entries
+
+            param_dicts = plugin_data_dict.get("parameters", {})
+            reconstructed_params: Dict[str, PluginParameter] = {}
+            if isinstance(param_dicts, dict):
+                for param_name, param_data_dict in param_dicts.items():
+                    if isinstance(param_data_dict, dict):
+                        try:
+                            reconstructed_params[param_name] = PluginParameter(
+                                name=str(param_data_dict.get("name", param_name)),
+                                value=param_data_dict.get("value", 0.0),
+                            )
+                        except TypeError as e:
+                            print(
+                                f"Warning: Could not reconstruct parameter {param_name} for {plugin_id}: {e}"
+                            )
+                            continue
+
+            try:
+                reconstructed_plugins[plugin_id] = PluginInfo(
+                    id=plugin_data_dict.get("id", plugin_id),
+                    name=plugin_data_dict.get("name", "Unknown Plugin Name"),
+                    path=plugin_data_dict.get("path", ""),
+                    filename=plugin_data_dict.get("filename", ""),
+                    plugin_type=plugin_data_dict.get("plugin_type", "unknown"),
+                    parameters=reconstructed_params,
+                    manufacturer=plugin_data_dict.get("manufacturer"),
+                    name_in_file=plugin_data_dict.get("name_in_file"),
+                )
+            except TypeError as e:
+                print(
+                    f"Warning: Could not reconstruct plugin info for {plugin_id}: {e}"
+                )
+                continue
+
+        return reconstructed_plugins
+
+    # Handle non-plugin cache files
+    result: Dict[str, Any] = {}
+    if isinstance(raw_data, dict):
+        result = {str(k): v for k, v in raw_data.items()}
+    elif isinstance(raw_data, list):
+        result = {str(i): item for i, item in enumerate(raw_data)}
+    return result
+
+
+def save_json_file(data: Union[Dict[Any, Any], List[Any]], file_path: Path) -> None:
+    """Save JSON data to a file."""
+    ensure_folder(file_path)
+    with open(file_path, "w", encoding="utf-8") as file:
         json.dump(data, file, indent=4)
 
+
 def load_ignores(ignores_path: Path) -> Set[str]:
-    """ Load ignores data (list of strings) from the file. """
+    """Load ignores data (list of strings) from the file."""
     content = load_json_file(ignores_path)
-    if isinstance(content, list): # Expects a list of strings
+    if isinstance(content, list):  # Expects a list of strings
         return set(item for item in content if isinstance(item, str))
     return set()
 
+
 def save_ignores(ignores: Set[str], ignores_path: Path) -> None:
-    """ Save ignores data to the file. """
+    """Save ignores data to the file."""
     save_json_file(sorted(list(ignores)), ignores_path)
 
-def copy_default_ignores(destination_path: Path) -> None:
-    """ Copy the default ignores file to the destination if it does not exist. """
-    # __name__ here refers to 'pedalboard_pluginary.data'
-    # resource_filename gets path to a resource within the package
-    default_ignores_src_path_str: str = resource_filename('pedalboard_pluginary', 'resources/default_ignores.json')
-    default_ignores_src_path: Path = Path(default_ignores_src_path_str)
 
-    if not destination_path.exists():
-        ensure_folder(destination_path) # Ensures parent directory exists
-        if default_ignores_src_path.exists():
-            shutil.copy(default_ignores_src_path, destination_path)
-        else:
-            # Fallback: create an empty list if source is missing for some reason
+def copy_default_ignores(destination_path: Path) -> None:
+    """Copy the default ignores file to the destination if it does not exist."""
+    try:
+        import importlib.resources
+
+        default_ignores_src_path = importlib.resources.files(
+            "pedalboard_pluginary.resources"
+        ).joinpath("default_ignores.json")
+
+        if not destination_path.exists():
+            ensure_folder(destination_path)
+            with importlib.resources.as_file(
+                default_ignores_src_path
+            ) as src_file_on_fs:
+                if src_file_on_fs.exists():
+                    shutil.copy(src_file_on_fs, destination_path)
+                else:
+                    save_json_file([], destination_path)
+    except (ImportError, FileNotFoundError, TypeError) as e:
+        print(
+            f"Warning: Could not copy default ignores using importlib.resources: {e}. Creating empty ignores file."
+        )
+        if not destination_path.exists():
+            ensure_folder(destination_path)
             save_json_file([], destination_path)
 </file>
 
-<file path="src/pedalboard_pluginary/scanner.py">
-import re
+<file path="tests/test_data.py">
 import os
-import platform
-import subprocess
-from pathlib import Path
-from urllib.parse import unquote, urlparse
-import itertools
-import logging
-import pedalboard # type: ignore[import-untyped]
-# pedalboard might not have complete type stubs.
-from tqdm import tqdm # type: ignore[import-untyped]
-# tqdm might not have complete type stubs.
+from pedalboard_pluginary.data import get_cache_path
+from unittest.mock import patch
 
-from typing import List, Dict, Any, Optional, Set, Union, Type, Pattern
-# Union for from_pb_param, Type for plugin_loader classes
+def test_get_cache_path_windows():
+    with patch.dict(os.environ, {"APPDATA": "C:\\Users\\TestUser\\AppData"}):
+        path = get_cache_path("test_cache")
+        assert str(path) == "C:\\Users\\TestUser\\AppData\\com.twardoch.pedalboard-pluginary\\test_cache.json"
 
-from .data import (
-    load_json_file,
-    save_json_file,
-    get_cache_path,
-    load_ignores,
-    copy_default_ignores,
-)
-from .utils import ensure_folder, from_pb_param
+@patch('platform.system', return_value='Darwin')
+def test_get_cache_path_macos(mock_platform_system):
+    # Test for macOS when APPDATA is not set (should not be used)
+    # and XDG_CACHE_HOME is not set (should not be used)
+    with patch.dict(os.environ, {}, clear=True):
+        path = get_cache_path("test_cache")
+        home = os.path.expanduser("~")
+        expected_path = f"{home}/Library/Application Support/com.twardoch.pedalboard-pluginary/test_cache.json"
+        assert str(path) == expected_path
 
-# Removed basicConfig from here; application/CLI should configure it.
-logger: logging.Logger = logging.getLogger(__name__)
+@patch('platform.system', return_value='Linux')
+def test_get_cache_path_linux_xdg_set(mock_platform_system):
+    xdg_cache_dir = "/custom/xdg/cache"
+    with patch.dict(os.environ, {"XDG_CACHE_HOME": xdg_cache_dir}, clear=True):
+        path = get_cache_path("test_cache")
+        expected_path = f"{xdg_cache_dir}/com.twardoch.pedalboard-pluginary/test_cache.json"
+        assert str(path) == expected_path
 
-# Define a type alias for plugin dictionaries for clarity
-PluginDict = Dict[str, Any] # More specific structure: name, path, filename, type, params
-ParamDict = Dict[str, Union[float, bool, str]]
-
-# Type alias for Pedalboard plugin classes
-PedalboardPluginType = Type[Union[pedalboard.AudioUnitPlugin, pedalboard.VST3Plugin]]
-
-
-class PedalboardScanner:
-    RE_AUFX: Pattern[str] = re.compile(r"aufx\s+(\w+)\s+(\w+)\s+-\s+(.*?):\s+(.*?)\s+\((.*?)\)")
-
-    plugins_path: Path
-    plugins: PluginDict
-    ignores_path: Path
-    ignores: Set[str]
-    safe_save: bool
-
-    def __init__(self) -> None:
-        self.plugins_path = get_cache_path("plugins")
-        self.plugins = {}
-        self.safe_save = True # If true, saves after each plugin sub-scan
-        self.ensure_ignores()
-
-    def ensure_ignores(self) -> None:
-        self.ignores_path = get_cache_path("ignores")
-        if not self.ignores_path.exists():
-            copy_default_ignores(self.ignores_path)
-        self.ignores = load_ignores(self.ignores_path)
-
-    def save_plugins(self) -> None:
-        ensure_folder(self.plugins_path)
-        # Sort plugins by key (plugin name) for consistent output
-        sorted_plugins = dict(sorted(self.plugins.items()))
-        save_json_file(sorted_plugins, self.plugins_path)
-
-    def _list_aufx_plugins(self) -> List[str]:
-        """Lists Audio Unit plugins using auval. Returns list of lines from auval output."""
-        try:
-            result = subprocess.run(
-                ["auval", "-l"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                check=True,
-            )
-            return result.stdout.splitlines()
-        except (subprocess.CalledProcessError, FileNotFoundError) as e: # Added FileNotFoundError
-            logger.error(f"Error running auval (is it installed and in PATH?): {e}")
-            return []
-
-    def _find_aufx_plugins(self, plugin_paths: Optional[List[Path]] = None) -> List[Path]:
-        """Finds resolvable paths to AUFX plugins, respecting ignores."""
-        resolved_plugin_paths: Optional[List[Path]] = [p.resolve() for p in plugin_paths] if plugin_paths else None
-
-        aufx_plugin_files: List[Path] = []
-        plugin_type: str = "aufx"
-
-        for line in self._list_aufx_plugins():
-            match = self.RE_AUFX.match(line)
-            if match:
-                (
-                    _plugin_code, # plugin_code not used
-                    _vendor_code, # vendor_code not used
-                    _vendor_name, # vendor_name not used
-                    _plugin_name, # plugin_name not used
-                    plugin_url,
-                ) = match.groups()
-                try:
-                    parsed_url = urlparse(plugin_url)
-                    plugin_path_str = unquote(parsed_url.path)
-                    if not plugin_path_str: # Skip if path is empty
-                        continue
-                    plugin_path = Path(plugin_path_str).resolve()
-                except Exception as e: # Catch potential errors in parsing/resolving
-                    logger.warning(f"Could not parse/resolve AUFX plugin URL '{plugin_url}': {e}")
-                    continue
-
-                plugin_fn: str = plugin_path.stem
-                plugin_key: str = f"{plugin_type}/{plugin_fn}"
-
-                if plugin_key not in self.ignores:
-                    if resolved_plugin_paths and plugin_path not in resolved_plugin_paths:
-                        continue
-                    aufx_plugin_files.append(plugin_path)
-        return aufx_plugin_files
-
-    def _get_vst3_folders(self, extra_folders: Optional[List[str]] = None) -> List[Path]:
-        """Gets standard VST3 plugin folders for the current OS, plus any extra_folders."""
-        os_name: str = platform.system()
-        folders: List[Path] = []
-
-        program_files = os.getenv("ProgramFiles", "C:\\Program Files")
-        program_files_x86 = os.getenv("ProgramFiles(x86)", "C:\\Program Files (x86)")
-
-        if os_name == "Windows":
-            folders = [
-                Path(program_files) / "Common Files" / "VST3",
-                Path(program_files_x86) / "Common Files" / "VST3",
-            ]
-        elif os_name == "Darwin":  # macOS
-            folders = [
-                Path("~/Library/Audio/Plug-Ins/VST3").expanduser(),
-                Path("/Library/Audio/Plug-Ins/VST3"),
-            ]
-        elif os_name == "Linux":
-            folders = [
-                Path("~/.vst3").expanduser(),
-                Path("/usr/lib/vst3"),
-                Path("/usr/local/lib/vst3"),
-            ]
-
-        if extra_folders:
-            folders.extend(Path(p) for p in extra_folders)
-
-        return [folder.resolve() for folder in folders if folder.exists() and folder.is_dir()]
-
-
-    def _find_vst3_plugins(self, extra_folders: Optional[List[str]] = None, plugin_paths: Optional[List[Path]] = None) -> List[Path]:
-        """Finds paths to VST3 plugins, respecting ignores."""
-        vst3_plugin_files: List[Path] = []
-        plugin_type: str = "vst3"
-
-        search_paths: List[Path]
-        if plugin_paths:
-            search_paths = [p.resolve() for p in plugin_paths]
-        else:
-            search_paths = list(
-                itertools.chain.from_iterable(
-                    folder.glob(f"*.{plugin_type}") # type: ignore[misc] # Path.glob issue with mypy?
-                    for folder in self._get_vst3_folders(extra_folders=extra_folders)
-                )
-            )
-
-        for plugin_path in search_paths:
-            if not plugin_path.is_file(): # Ensure it's a file
-                continue
-            plugin_fn: str = plugin_path.stem
-            plugin_key: str = f"{plugin_type}/{plugin_fn}"
-            if plugin_key not in self.ignores:
-                vst3_plugin_files.append(plugin_path)
-        return vst3_plugin_files
-
-    def get_plugin_params(self, plugin_path: Path, plugin_name: Optional[str]) -> ParamDict:
-        """Loads a plugin and returns its parameters."""
-        try:
-            # str(plugin_path) is required by pedalboard
-            plugin = pedalboard.load_plugin(str(plugin_path), plugin_name=plugin_name)
-            plugin_params: ParamDict = {
-                k: from_pb_param(getattr(plugin, k)) for k in plugin.parameters.keys()
-            }
-            return plugin_params
-        except Exception as e:
-            logger.error(f"Could not load/introspect plugin '{plugin_name or plugin_path.stem}' from '{plugin_path}': {e}")
-            return {}
-
-
-    def scan_single_plugin_file(
-        self, plugin_type: str, plugin_path: Path, plugin_loader: PedalboardPluginType
-    ) -> None:
-        """Scans a single plugin file which might contain multiple plugin definitions."""
-        plugin_path_str = str(plugin_path) # pedalboard expects string paths
-        plugin_fn = plugin_path.stem
-
-        try:
-            # Use get_plugin_names_from_file if available (newer pedalboard), or handle single.
-            # Assuming plugin_loader (e.g. pedalboard.VST3Plugin) has this method.
-            # This method might not exist or work the same for all plugin types/loaders.
-            plugin_names_in_file: List[Optional[str]]
-            if hasattr(plugin_loader, 'get_plugin_names_from_file'):
-                 plugin_names_in_file = plugin_loader.get_plugin_names_from_file(plugin_path_str) # type: ignore
-            else: # Fallback for older pedalboard or loaders without this
-                 plugin_names_in_file = [None] # Try to load by path, assuming one plugin or default
-
-            if not plugin_names_in_file: # If list is empty (e.g. bad file)
-                logger.warning(f"No plugin names found in file: {plugin_path_str}")
-                return
-
-            for plugin_name_variant in plugin_names_in_file:
-                # If plugin_name_variant is None, it means pedalboard will try to load the default plugin from the file.
-                # The actual key for self.plugins should ideally be unique and descriptive.
-                # Using plugin_name_variant if available, else a generated one.
-
-                actual_plugin_name_to_check: str
-                if plugin_name_variant:
-                    actual_plugin_name_to_check = plugin_name_variant
-                else:
-                    # This might not be unique if multiple files have same stem and no explicit name
-                    actual_plugin_name_to_check = f"{plugin_fn} (default)"
-
-                if actual_plugin_name_to_check in self.plugins: # Check against a potentially more robust key
-                    continue
-
-                plugin_params = self.get_plugin_params(plugin_path, plugin_name_variant)
-                if not plugin_params and not plugin_name_variant: # If get_plugin_params failed for default
-                    # This might indicate the file itself is problematic or not a plugin
-                    logger.warning(f"Failed to get params for default plugin in {plugin_path_str}")
-                    continue
-
-                # Determine the plugin name to use for storage.
-                # If pedalboard provides a name after loading (e.g. from plugin.name), use that.
-                # For now, we use plugin_name_variant or generate one.
-                final_plugin_name_for_storage = actual_plugin_name_to_check # Revisit if this leads to clashes
-
-                plugin_entry: PluginDict = {
-                    "name": final_plugin_name_for_storage, # This should be the name pedalboard identifies
-                    "path": plugin_path_str,
-                    "filename": plugin_fn,
-                    "type": plugin_type,
-                    "params": plugin_params,
-                }
-                # The key for self.plugins should be the unique name pedalboard uses
-                self.plugins[final_plugin_name_for_storage] = plugin_entry
-
-        except Exception as e:
-            logger.error(f"Error scanning plugin file {plugin_path_str} with loader {plugin_loader.__name__}: {e}")
-
-
-    def scan_typed_plugins(self, plugin_type: str, found_plugins: List[Path], plugin_loader: PedalboardPluginType) -> None:
-        """Scans a list of found plugin files of a specific type."""
-        if not found_plugins:
-            logger.info(f"No new/found plugins of type {plugin_type} to scan.")
-            return
-
-        logger.info(f"Scanning {len(found_plugins)} {plugin_type} plugin files...")
-        with tqdm(found_plugins, desc=f"Scanning {plugin_type}", unit="file") as pbar:
-            for plugin_path in pbar:
-                plugin_fn = plugin_path.stem
-                pbar.set_postfix_str(plugin_fn, refresh=True)
-                try:
-                    self.scan_single_plugin_file(
-                        plugin_type, plugin_path, plugin_loader
-                    )
-                except Exception as e: # Catch-all for safety during iteration
-                    logger.error(f"Unexpected error processing {plugin_path}: {e}")
-
-                if self.safe_save: # Save after each file (can be slow)
-                    self.save_plugins()
-        if not self.safe_save: # Save once at the end if not saving incrementally
-            self.save_plugins()
-
-
-    def scan_aufx_plugins(self, plugin_paths: Optional[List[Path]] = None) -> None:
-        """Scans Audio Unit (AUFX) plugins."""
-        logger.info("Scanning for AUFX plugins...")
-        found_aufx_plugins = self._find_aufx_plugins(plugin_paths=plugin_paths)
-        self.scan_typed_plugins(
-            "aufx",
-            found_aufx_plugins,
-            pedalboard.AudioUnitPlugin,
-        )
-
-    def scan_vst3_plugins(self, extra_folders: Optional[List[str]] = None, plugin_paths: Optional[List[Path]] = None) -> None:
-        """Scans VST3 plugins."""
-        logger.info("Scanning for VST3 plugins...")
-        found_vst3_plugins = self._find_vst3_plugins(extra_folders=extra_folders, plugin_paths=plugin_paths)
-        self.scan_typed_plugins(
-            "vst3",
-            found_vst3_plugins,
-            pedalboard.VST3Plugin,
-        )
-
-    def scan_all_plugins(self, extra_folders: Optional[List[str]] = None, plugin_paths: Optional[List[Path]] = None) -> None:
-        """Scans all supported plugin types."""
-        # If specific plugin_paths are given, we might only scan those.
-        # Current logic: if plugin_paths is provided, it's used by type-specific finders.
-        # extra_folders is only for VST3 if plugin_paths is None for VST3.
-
-        self.scan_vst3_plugins(extra_folders=extra_folders, plugin_paths=plugin_paths)
-        if platform.system() == "Darwin":
-            self.scan_aufx_plugins(plugin_paths=plugin_paths) # AU only on Darwin
-
-    def full_scan(self, extra_folders: Optional[List[str]] = None) -> None:
-        """Performs a full scan, clearing existing plugins."""
-        logger.info("Starting full plugin scan (clearing existing cache)...")
-        self.plugins = {} # Clear existing plugins before scan
-        # The original 'scan' called scan_plugins with extra_folders=None, which was a bug
-        # if extra_folders was meant to be passed down.
-        # Assuming 'scan_all_plugins' is the intended method for a general scan.
-        self.scan_all_plugins(extra_folders=extra_folders) # plugin_paths=None for discovery
-        self.save_plugins()
-        logger.info("Full plugin scan finished.")
-
-    def rescan(self, extra_folders: Optional[List[str]] = None) -> None: # Kept original name
-        """Alias for full_scan for backward compatibility or semantic preference."""
-        self.full_scan(extra_folders=extra_folders)
-
-    def update_scan(self, extra_folders: Optional[List[str]] = None) -> None:
-        """Scans for new plugins not already in the cache."""
-        logger.info("Starting update scan (looking for new plugins)...")
-        if not self.plugins_path.exists():
-            logger.info("No existing plugin cache found. Performing full scan instead.")
-            self.full_scan(extra_folders=extra_folders)
-            return
-
-        # Load existing plugins to compare against
-        # Type annotation for p ensures mypy knows p is a dict and has 'path' and 'type'
-        existing_plugins_data = load_json_file(self.plugins_path)
-        if not isinstance(existing_plugins_data, dict): # Should be a dict
-             logger.warning("Plugin cache is not a valid dictionary. Performing full scan.")
-             self.full_scan(extra_folders=extra_folders)
-             return
-
-        self.plugins = existing_plugins_data # Start with current cache
-
-        # Logic to find only new plugins
-        # VST3
-        all_found_vst3_paths: Set[Path] = {p.resolve() for p in self._find_vst3_plugins(extra_folders=extra_folders)}
-        cached_vst3_paths: Set[Path] = {Path(p_info["path"]).resolve() for p_info in self.plugins.values() if p_info.get("type") == "vst3" and "path" in p_info}
-        new_vst3_paths_to_scan: List[Path] = sorted(list(all_found_vst3_paths - cached_vst3_paths))
-        if new_vst3_paths_to_scan:
-            logger.info(f"Found {len(new_vst3_paths_to_scan)} new VST3 plugin files to scan.")
-            self.scan_vst3_plugins(plugin_paths=new_vst3_paths_to_scan) # Scan only these new paths
-        else:
-            logger.info("No new VST3 plugin files found.")
-
-        # AUFX (macOS only)
-        if platform.system() == "Darwin":
-            all_found_aufx_paths: Set[Path] = {p.resolve() for p in self._find_aufx_plugins()}
-            cached_aufx_paths: Set[Path] = {Path(p_info["path"]).resolve() for p_info in self.plugins.values() if p_info.get("type") == "aufx" and "path" in p_info}
-            new_aufx_paths_to_scan: List[Path] = sorted(list(all_found_aufx_paths - cached_aufx_paths))
-            if new_aufx_paths_to_scan:
-                logger.info(f"Found {len(new_aufx_paths_to_scan)} new AUFX plugin files to scan.")
-                self.scan_aufx_plugins(plugin_paths=new_aufx_paths_to_scan) # Scan only these
-            else:
-                logger.info("No new AUFX plugin files found.")
-
-        # self.save_plugins() is called within scan_typed_plugins if not safe_save,
-        # or after each file if safe_save. If scan_typed_plugins wasn't called (no new plugins),
-        # an explicit save here might be redundant but harmless if state hasn't changed.
-        # However, if safe_save is False, it's crucial here.
-        if not self.safe_save and (new_vst3_paths_to_scan or (platform.system() == "Darwin" and 'new_aufx_paths_to_scan' in locals() and new_aufx_paths_to_scan)):
-             self.save_plugins()
-        elif not new_vst3_paths_to_scan and not (platform.system() == "Darwin" and 'new_aufx_paths_to_scan' in locals() and new_aufx_paths_to_scan):
-             logger.info("No new plugins found in update scan. Cache remains unchanged.")
-
-
-        logger.info("Update scan finished.")
-
-    # Renamed original 'scan' to 'full_scan' and 'update' to 'update_scan' for clarity.
-    # Kept original names for CLI compatibility by aliasing them if needed in __main__.py
-    # For direct class usage, the new names are more descriptive.
-    # The original `scan` method in the class was equivalent to `full_scan`.
-    # The original `update` method in the class is `update_scan`.
-    # The CLI part in __main__.py used `rescan` (for full) and `update`.
-
-    def get_json(self) -> str:
-        """Returns a JSON string representation of the currently scanned/loaded plugins."""
-        return json.dumps(self.plugins, indent=4)
+@patch('platform.system', return_value='Linux')
+def test_get_cache_path_linux_xdg_not_set(mock_platform_system):
+    # Test when XDG_CACHE_HOME is not set
+    with patch.dict(os.environ, {}, clear=True): # Ensure XDG_CACHE_HOME is not set
+        path = get_cache_path("test_cache")
+        home = os.path.expanduser("~")
+        expected_path = f"{home}/.cache/com.twardoch.pedalboard-pluginary/test_cache.json"
+        assert str(path) == expected_path
 </file>
 
-<file path="src/pedalboard_pluginary/utils.py">
-from pathlib import Path
-from typing import Any, Union
+<file path=".gitignore">
+temp/
 
-def ensure_folder(path: Path) -> None:
-    """ Ensure that a folder exists. """
-    path.parent.mkdir(parents=True, exist_ok=True)
+# Temporary and binary files
+*~
+*.py[cod]
+*.so
+*.cfg
+!.isort.cfg
+!setup.cfg
+*.orig
+*.log
+*.pot
+__pycache__/*
+.cache/*
+.*.swp
+*/.ipynb_checkpoints/*
+.DS_Store
 
-def from_pb_param(data: Any) -> Union[float, bool, str]:
-    """
-    Converts a pedalboard parameter value to a Python native type.
-    Pedalboard parameter values can be string representations of floats, booleans, or just strings.
-    """
-    drep = str(data)
-    try:
-        return float(drep)
-    except ValueError:
-        pass
-    if drep.lower() == "true":
-        return True
-    if drep.lower() == "false":
-        return False
-    return drep
+# Project files
+.ropeproject
+.project
+.pydevproject
+.settings
+.idea
+.vscode
+tags
+
+# Package files
+*.egg
+*.eggs/
+.installed.cfg
+*.egg-info
+
+# Unittest and coverage
+htmlcov/*
+.coverage
+.coverage.*
+.tox
+junit*.xml
+coverage.xml
+.pytest_cache/
+
+# Build and docs folder/files
+build/*
+dist/*
+sdist/*
+docs/api/*
+docs/_rst/*
+docs/_build/*
+cover/*
+MANIFEST
+
+# Per-project virtualenvs
+.venv*/
+.conda*/
+.python-version
 </file>
 
 <file path=".pre-commit-config.yaml">
@@ -1347,22 +1957,29 @@ repos:
 #   - id: codespell
 </file>
 
+<file path="AUTHORS.md">
+# Contributors
+
+* Adam Twardoch <adam+github@twardoch.com>
+</file>
+
 <file path="pyproject.toml">
 [build-system]
-requires = ["setuptools>=46.1.0", "setuptools_scm[toml]>=5"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
 
 [tool.setuptools_scm]
 version_scheme = "no-guess-dev"
 
 [project]
-name = "pedalboard_pluginary"
-description = "VST & AU plugin management for Spotify Pedalboard"
+name = "pedalboard-pluginary"
+version = "0.1.0"
+description = "A plugin scanner for Pedalboard"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "Apache-2.0" } # Or file = "LICENSE.txt" if preferred by newer setuptools
+license = { text = "Apache-2.0" }
 authors = [
-    { name = "Adam Twardoch", email = "adam+github@twardoch.com" }
+    { name = "Adam Twardoch", email = "adam@twardoch.com" }
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -1378,10 +1995,10 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "pedalboard>=0.8.6",
+    "pedalboard>=0.8.7",
     "fire>=0.5.0",
-    "tqdm>=4.66.1",
-    "python_benedict>=0.33.0",
+    "python-benedict>=0.33.0",
+    "pyyaml>=6.0.1",
 ]
 
 [project.urls]
@@ -1390,30 +2007,24 @@ Source = "https://github.com/twardoch/pedalboard-pluginary"
 Tracker = "https://github.com/twardoch/pedalboard-pluginary/issues"
 
 [project.optional-dependencies]
-testing = [
-    "pytest",
-    "pytest-cov",
-    "mypy>=1.0", # Added mypy
+dev = [
+    "pytest>=7.4.4",
+    "pytest-cov>=4.1.0",
+    "mypy>=1.8.0",
+    "flake8>=7.0.0",
+    "black>=24.1.1",
+    "isort>=5.13.2",
 ]
 
 [project.scripts]
-pbpluginary = "pedalboard_pluginary.__main__:cli"
+pbpluginary = "pedalboard_pluginary.__main__:main"
 
 [tool.setuptools]
-zip_safe = false
-include_package_data = true
-package_dir = {"" = "src"}
-# `find` directive for packages is often implicit with src layout, or can be more specific
-# For example, packages = ["pedalboard_pluginary"] if not using find:
-packages = {find = {where = ["src"], exclude = ["tests*"]}}
-
-
-[tool.setuptools.package-data]
-"pedalboard_pluginary" = ["resources/*.json"]
+packages = ["pedalboard_pluginary"]
+package-dir = {"" = "src"}
 
 [tool.pytest.ini_options]
-addopts = "--cov pedalboard_pluginary --cov-report term-missing --verbose"
-norecursedirs = ["dist", "build", ".tox"]
+addopts = "--cov=pedalboard_pluginary --cov-report=term-missing"
 testpaths = ["tests"]
 
 [tool.flake8]
@@ -1429,27 +2040,571 @@ exclude = [
 
 [tool.mypy]
 python_version = "3.9"
-mypy_path = "src"
-ignore_missing_imports = true # For libraries without stubs like pedalboard, fire, tqdm, benedict
-# More specific ignores can be added:
-# [[tool.mypy.overrides]]
-# module = [
-#    "pedalboard",
-#    "fire",
-#    "tqdm",
-#    "benedict",
-#    "pkg_resources" # if types-setuptools is not sufficient or causes issues
-# ]
-# ignore_missing_imports = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
 
-# Show error codes so they can be suppressed if necessary.
-show_error_codes = true
-# Strict optional checking, etc., can be enabled for more thoroughness.
-# strict_optional = true
-# warn_return_any = true
-# warn_unused_ignores = true
-# disallow_untyped_defs = true # Enforce type hints on all functions
-# disallow_incomplete_defs = true # Enforce full type hints
+[tool.black]
+line-length = 88
+target-version = ['py39']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+</file>
+
+<file path="tox.ini">
+# Tox configuration file
+# Read more under https://tox.wiki/
+# THIS SCRIPT IS SUPPOSED TO BE AN EXAMPLE. MODIFY IT ACCORDING TO YOUR NEEDS!
+
+[tox]
+minversion = 3.24
+envlist = default
+isolated_build = True
+
+[testenv]
+description = Invoke pytest to run automated tests
+setenv =
+    TOXINIDIR = {toxinidir}
+passenv =
+    HOME
+    SETUPTOOLS_*
+extras =
+    testing
+commands =
+    pytest {posargs}
+
+# To run `tox -e lint` you need to make sure you have a
+# `.pre-commit-config.yaml` file. See https://pre-commit.com
+# [testenv:lint]
+# description = Perform static analysis and style checks
+# skip_install = True
+# deps = pre-commit
+# passenv =
+#     HOMEPATH
+#     PROGRAMDATA
+#     SETUPTOOLS_*
+# commands =
+#     pre-commit run --all-files {posargs:--show-diff-on-failure}
+
+[testenv:{build,clean}]
+description =
+    build: Build the package in isolation according to PEP517, see https://github.com/pypa/build
+    clean: Remove old distribution files and temporary build artifacts (./build and ./dist)
+skip_install = True
+changedir = {toxinidir}
+deps =
+    build: build[virtualenv]
+passenv =
+    SETUPTOOLS_*
+commands =
+    clean: python -c 'import shutil; [shutil.rmtree(p, True) for p in ("build", "dist")]'
+    clean: python -c 'import pathlib, shutil; [shutil.rmtree(p, True) for p in pathlib.Path("src").glob("*.egg-info")]'
+    build: python -m build {posargs}
+
+[testenv:publish]
+description =
+    Publish the package you have been developing to a package index server.
+    By default, it uses testpypi. If you really want to publish your package
+    to be publicly accessible in PyPI, use the `-- --repository pypi` option.
+skip_install = True
+changedir = {toxinidir}
+passenv =
+    TWINE_USERNAME
+    TWINE_PASSWORD
+    TWINE_REPOSITORY
+    TWINE_REPOSITORY_URL
+deps = twine
+commands =
+    python -m twine check dist/*
+    python -m twine upload {posargs:--repository {env:TWINE_REPOSITORY:testpypi}} dist/*
+</file>
+
+<file path=".github/workflows/ci.yml">
+name: Python package CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11']
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install fire pytest pytest-cov # Added pytest-cov for coverage
+    - name: Run tests with coverage
+      run: |
+        python -m pip install -e .
+        # Pytest is configured in pyproject.toml to run with --cov
+        # and output to term-missing. It also creates .coverage file.
+        pytest
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        # token: ${{ secrets.CODECOV_TOKEN }} # Only if needed for private repos or specific cases
+        fail_ci_if_error: true # Optional: fail CI if coverage upload fails
+
+  publish:
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    - name: Build and publish
+      env:
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+      run: |
+        python -m pip install --upgrade build twine
+        python -m build
+        twine upload dist/*
+</file>
+
+<file path="src/pedalboard_pluginary/__init__.py">
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    # Change here if project is renamed and does not equal the package name
+    dist_name = __name__
+    __version__ = version(dist_name)
+except PackageNotFoundError:  # pragma: no cover
+    __version__ = "unknown"
+finally:
+    del version, PackageNotFoundError
+
+from .core import PedalboardPluginary
+</file>
+
+<file path="src/pedalboard_pluginary/__main__.py">
+#!/usr/bin/env python3
+# benedict might also lack stubs.
+import json
+import logging  # For basicConfig
+import sys  # For sys.stdout in Display lambda
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+import fire
+import yaml  # type: ignore[import-not-found]
+
+# fire library might not have complete type stubs, common to ignore if problematic for mypy.
+# Consider adding types-fire if available and it resolves issues.
+from benedict import benedict as bdict  # type: ignore[import-untyped]
+
+from .core import PedalboardPluginary
+from .data import (
+    PLUGINS_CACHE_FILENAME_BASE,
+    get_cache_path,
+    load_json_file,
+    save_json_file,
+)
+from .models import PluginInfo
+from .scanner import PedalboardScanner
+
+# Define a more specific type for extra_folders if it's always List[str] after split
+ExtraFoldersType = Optional[List[str]]
+
+
+def setup_logging(verbose_level: int = 0) -> None:
+    """Configures basic logging for CLI output."""
+    # verbose_level: 0 = WARNING, 1 = INFO, 2 = DEBUG
+    log_level = logging.WARNING
+    if verbose_level == 1:
+        log_level = logging.INFO
+    elif verbose_level >= 2:
+        log_level = logging.DEBUG
+
+    # Only configure if no handlers are already set (e.g., by tests or other imports)
+    # This basicConfig will go to stderr by default for WARNING and above.
+    # For INFO, let's direct to stdout for better CLI experience.
+    if not logging.getLogger().hasHandlers():
+        if log_level <= logging.INFO:
+            # For INFO and DEBUG, use a more verbose format and stdout
+            logging.basicConfig(
+                stream=sys.stdout,
+                level=log_level,
+                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            )
+        else:
+            # For WARNING, ERROR, CRITICAL, use stderr and simpler format
+            logging.basicConfig(
+                level=log_level, format="%(levelname)s: %(name)s: %(message)s"
+            )
+
+
+def scan_plugins_cli(extra_folders: Optional[str] = None, verbose: int = 0) -> None:
+    """Scans all plugins, optionally including extra folders (comma-separated string)."""
+    folders_list: List[str] = extra_folders.split(",") if extra_folders else []
+    scanner = PedalboardScanner(specific_paths=folders_list)
+    scanner.full_scan()  # This updates scanner.plugins
+    if scanner.plugins:  # Only save if we found plugins
+        cache_file = get_cache_path(PLUGINS_CACHE_FILENAME_BASE)
+        save_json_file(scanner.plugins, cache_file)
+
+
+def update_plugins_cli(extra_folders: Optional[str] = None, verbose: int = 0) -> None:
+    """Updates the plugin cache, optionally including extra folders (comma-separated string)."""
+    scan_plugins_cli(extra_folders, verbose)
+
+
+def list_json_cli() -> Dict:
+    """Lists all plugins in JSON format."""
+    cache_file = get_cache_path(PLUGINS_CACHE_FILENAME_BASE)
+    if not cache_file.exists():
+        return {}
+    return load_json_file(cache_file)
+
+
+def list_yaml_cli() -> str:
+    """Lists all plugins in YAML format."""
+    plugins = list_json_cli()
+    return yaml.dump(plugins, sort_keys=False, indent=2)
+
+
+def main():
+    """Main entry point for the CLI."""
+    fire.Fire({
+        "scan": scan_plugins_cli,
+        "list": list_json_cli,
+        "json": list_json_cli,
+        "yaml": list_yaml_cli,
+        "update": update_plugins_cli,
+    })
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="src/pedalboard_pluginary/scanner.py">
+import itertools
+import json
+import logging
+import os
+import platform
+import re
+import subprocess
+from pathlib import Path
+
+# tqdm might not have complete type stubs.
+from typing import Any, Dict, List, Optional, Pattern, Set, Type, Union, cast
+from urllib.parse import unquote, urlparse
+
+import pedalboard  # type: ignore[import-untyped]
+from pedalboard import (  # type: ignore[import-untyped]
+    AudioUnitPlugin,
+    Plugin,
+    VST3Plugin,
+)
+
+# pedalboard might not have complete type stubs.
+from tqdm import tqdm  # type: ignore[import-untyped]
+
+# Union for from_pb_param, Type for plugin_loader classes
+from .data import (
+    copy_default_ignores,
+    get_cache_path,
+    load_ignores,
+    load_json_file,
+    save_json_file,
+)
+from .utils import ensure_folder, from_pb_param
+
+# Removed basicConfig from here; application/CLI should configure it.
+logger: logging.Logger = logging.getLogger(__name__)
+
+from .models import ParameterValue, PluginInfo, PluginParameter
+from .scanners.au_scanner import AUScanner
+from .scanners.vst3_scanner import VST3Scanner
+from .utils import ensure_folder, from_pb_param
+
+# Type alias for pedalboard plugin types
+PedalboardPluginType = Any  # type: ignore[misc]
+
+"""Base scanner class for plugin scanning."""
+from abc import ABC, abstractmethod
+
+
+class BaseScanner(ABC):
+    """Base class for plugin scanners."""
+
+    def __init__(
+        self,
+        ignore_paths: Optional[List[str]] = None,
+        specific_paths: Optional[List[str]] = None,
+    ):
+        """Initialize the scanner with optional ignore paths and specific paths."""
+        self.ignore_paths = ignore_paths or []
+        self.specific_paths = specific_paths or []
+
+    @abstractmethod
+    def find_plugin_files(self) -> List[Path]:
+        """Find all plugin files of the scanner's type."""
+        pass
+
+    @abstractmethod
+    def scan_plugin(self, plugin_path: Path) -> Optional[PluginInfo]:
+        """Scan a plugin and return its information."""
+        pass
+
+
+class PedalboardScanner:
+    """Main scanner class that coordinates scanning of all plugin types."""
+
+    def __init__(
+        self,
+        ignore_paths: Optional[List[str]] = None,
+        specific_paths: Optional[List[str]] = None,
+    ):
+        """Initialize the scanner with optional ignore paths and specific paths."""
+        self.ignore_paths = ignore_paths or []
+        self.specific_paths = specific_paths or []
+        self.scanners = [
+            AUScanner(
+                ignore_paths=self.ignore_paths, specific_paths=self.specific_paths
+            ),
+            VST3Scanner(
+                ignore_paths=self.ignore_paths, specific_paths=self.specific_paths
+            ),
+        ]
+        self.plugins: Dict[str, PluginInfo] = {}
+
+    def full_scan(self) -> Dict[str, PluginInfo]:
+        """Perform a full scan of all plugin types."""
+        self.plugins = {}
+
+        for scanner in self.scanners:
+            plugin_files = scanner.find_plugin_files()
+            for plugin_file in plugin_files:
+                plugin_info = scanner.scan_plugin(plugin_file)
+                if plugin_info:
+                    self.plugins[plugin_info.id] = plugin_info
+
+        return self.plugins
+
+    def scan_typed_plugins(
+        self,
+        plugin_type: str,
+        found_plugins: List[Path],
+        plugin_loader: PedalboardPluginType,
+    ) -> None:
+        """Scan plugins of a specific type."""
+        for plugin_path in found_plugins:
+            plugin_key = f"{plugin_type}:{plugin_path}"
+            if plugin_key in self.ignores:
+                logger.info(f"Skipping ignored plugin: {plugin_path}")
+                continue
+
+            try:
+                plugin = pedalboard.load_plugin(str(plugin_path))  # type: ignore[attr-defined]
+                params = {}
+                for name, value in plugin.parameters.items():  # type: ignore[attr-defined]
+                    params[name] = PluginParameter(
+                        name=name,
+                        value=value,
+                    )
+
+                self.plugins[plugin_key] = PluginInfo(
+                    id=plugin_key,
+                    name=plugin_path.stem,
+                    path=str(plugin_path),
+                    filename=plugin_path.name,
+                    plugin_type=plugin_type,
+                    parameters=params,
+                    manufacturer=None,
+                    name_in_file=None,
+                )
+                logger.info(f"Scanned plugin: {plugin_path}")
+            except Exception as e:
+                logger.error(f"Failed to scan plugin {plugin_path}: {e}")
+                self.ignores.add(plugin_key)
+
+    def scan_aufx_plugins(self, plugin_paths: Optional[List[Path]] = None) -> None:
+        """Scans Audio Unit (AUFX) plugins using AUScanner."""
+        if not self.au_scanner:
+            logger.info("AUScanner not available on this platform.")
+            return
+
+        logger.info("Scanning for AUFX plugins...")
+        # AUScanner's find_plugin_files takes plugin_paths
+        found_aufx_plugin_files = self.au_scanner.find_plugin_files(
+            plugin_paths=plugin_paths
+        )
+        self.scan_typed_plugins(
+            plugin_type="aufx",
+            found_plugins=found_aufx_plugin_files,
+            plugin_loader=AudioUnitPlugin,  # type: ignore[attr-defined]
+        )
+
+    def scan_vst3_plugins(
+        self,
+        extra_folders: Optional[List[str]] = None,
+        plugin_paths: Optional[List[Path]] = None,
+    ) -> None:
+        """Scans VST3 plugins using VST3Scanner."""
+        logger.info("Scanning for VST3 plugins...")
+        # VST3Scanner's find_plugin_files takes extra_folders and plugin_paths
+        found_vst3_plugin_files = self.vst3_scanner.find_plugin_files(
+            extra_folders=extra_folders, plugin_paths=plugin_paths
+        )
+        self.scan_typed_plugins(
+            plugin_type="vst3",
+            found_plugins=found_vst3_plugin_files,
+            plugin_loader=VST3Plugin,  # type: ignore[attr-defined]
+        )
+
+    def full_scan(
+        self,
+        extra_folders: Optional[List[str]] = None,
+        plugin_paths: Optional[List[Path]] = None,
+    ) -> None:
+        """Perform a full scan of all supported plugin types."""
+        self.scan_aufx_plugins(plugin_paths=plugin_paths)
+        self.scan_vst3_plugins(extra_folders=extra_folders, plugin_paths=plugin_paths)
+        self.save_data()
+
+    def update_scan(
+        self,
+        extra_folders: Optional[List[str]] = None,
+        plugin_paths: Optional[List[Path]] = None,
+    ) -> None:
+        """Update the scan with new plugins while preserving existing data."""
+        self.full_scan(extra_folders=extra_folders, plugin_paths=plugin_paths)
+
+    def get_json(self) -> str:
+        """Return the plugins data as a JSON string."""
+        return json.dumps(self.plugins, indent=2)
+</file>
+
+<file path="src/pedalboard_pluginary/utils.py">
+from pathlib import Path
+from typing import Any, Union
+
+def ensure_folder(path: Path) -> None:
+    """ Ensure that a folder exists. """
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+def from_pb_param(data: Any) -> Union[float, bool, str]:
+    """
+    Converts a pedalboard parameter value to a Python native type.
+    Pedalboard parameter values can be string representations of floats, booleans, or just strings.
+    """
+    drep = str(data)
+    try:
+        return float(drep)
+    except ValueError:
+        pass
+    if drep.lower() == "true":
+        return True
+    if drep.lower() == "false":
+        return False
+    return drep
+</file>
+
+<file path="README.md">
+# Pedalboard Pluginary
+
+[![Codecov](https://codecov.io/gh/twardoch/pedalboard-pluginary/branch/main/graph/badge.svg?token=YOUR_CODECOV_TOKEN_HERE)](https://codecov.io/gh/twardoch/pedalboard-pluginary)
+<!-- Replace YOUR_CODECOV_TOKEN_HERE with the actual token from Codecov if needed, or remove the token part if your repo is public and Codecov supports tokenless uploads for it.
+The URL should also be verified once the repo is active on Codecov. -->
+
+_Pedalboard Pluginary_ is an independent Python-based package and command-line tool that scans and lists VST-3 plugins on macOS and Windows, and Audio Unit (AU) plugins on macOS. It’s intended as a companion for the _[Pedalboard](https://github.com/spotify/pedalboard)_ Python library by Spotify, but it’s not affiliated with _Pedalboard_ or Spotify.
+
+## Features
+
+With _Pedalboard Pluginary_, you can scan and list VST-3 and AU audio plugins installed on your machine, including their default parameters. 
+
+- It automatically scans and catalogs VST-3 and AU plugins installed on your system.
+- Provides a command-line interface (CLI) for quick access to your plugin library.
+- Saves the plugin information in a JSON file. This file has the information about the plugin parameters and their default values. 
+- Works on Windows and macOS (Windows is currently untested).
+- It bundles an `ignores.json` file, which “blacklists” some plugins that are known to cause issues with Pedalboard. It will not scan these, and will not include them in the cache. If you find that some plugins are not working with Pedalboard, you can add them to your `ignores.json` file. See “Contributing” section below.
+
+## Future plans
+
+I plan to extend the package with another functionality, “jobs”, which will allow to load a stack of plugins with their parameter values from a dictionary or JSON file, and run them in a batch using Pedalboard. 
+
+## Installation
+
+To install _Pedalboard Pluginary_, run:
+
+```bash
+python3 -m pip install --upgrade pedalboard-pluginary
+```
+
+For the current development version:
+
+```bash
+python3 -m pip install --upgrade git+https://github.com/twardoch/pedalboard-pluginary
+```
+
+## Command-line usage
+
+After installation, you can use `pbpluginary` from the command line.
+
+### Commands:
+
+- `pbpluginary list` displays the plugin information stored in the cache, as a JSON. If no cache exists, it will scan your system and create the cache.
+- `pbpluginary scan` scans all available plugins, and caches the information. Run this if you’ve installed or upgraded some VST-3 or AU plugins.
+
+## Python usage
+
+You can use _Pedalboard Pluginary_ as a library in your Python scripts. Here's a quick example:
+
+```python
+from pedalboard_pluginary import PedalboardPluginary
+
+pluginary = PedalboardPluginary()
+print(pluginary.list_plugins())
+```
+
+This snippet will list all plugins that have been scanned and cached, as a JSON.
+
+## Changes
+
+- **v1.1.0**: Added `update` CLI command which only scans plugins that aren’t cached yet. Not perfect. Added `json` and `yaml` CLI commands. Additional refactorings. 
+- **v1.0.0**: Initial release with basic scanning and listing of both VST-3 and AU plugins, and command-line interface for easy interaction.
+
+## License
+
+- **Pedalboard Pluginary** is written by Adam Twardoch, with assistance from GPT-4.
+- Copyright (c) 2023 Adam Twardoch.
+- Licensed under the [Apache-2.0 license](https://raw.githubusercontent.com/twardoch/pedalboard-pluginary/main/LICENSE.txt).
+- _Pedalboard Pluginary_ is not affiliated with [Pedalboard](https://github.com/spotify/pedalboard) or Spotify.
+
+## Contributing
+
+- If you encounter any issues or have suggestions, feel free to open an [issue](https://github.com/twardoch/pedalboard-pluginary/issues) on GitHub. 
+- If you find that some plugins are not working with Pedalboard, open an issue that lists the key, which is the plugin type and the base filename, like `"aufx/CoreAudio"` or `"vst3/RX 10 Connect"`. You can also modify the [`default_ignores.json`](https://raw.githubusercontent.com/twardoch/pedalboard-pluginary/main/src/pedalboard_pluginary/resources/default_ignores.json) file, and submit a pull request.
+- If you want to contribute code, please open a pull request.
 </file>
 
 </files>
