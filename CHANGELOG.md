@@ -11,10 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Created PLAN.md for implementation roadmap
 - Created TODO.md for task tracking
 - Created CHANGELOG.md for version history
+- **SQLite Cache Backend Revolution**: High-performance SQLite-based cache with indexing and full-text search
+- Cache package structure with SQLiteCacheBackend, JSONCacheBackend, and migration utilities
+- Full-text search capabilities using SQLite FTS5 for instant plugin discovery
+- Automatic JSON to SQLite migration for backward compatibility
+- Performance benchmarking test suite for cache backends
+- Advanced search and filtering methods in PedalboardScanner
+- Cache statistics and management functionality
 
 ### Changed
 - Refactored scanner architecture to use modular scanner classes
 - Improved type annotations throughout the codebase
+- **Cache Architecture Modernization**: PedalboardScanner now uses pluggable cache backends
+- Updated data.py to support both JSON and SQLite cache paths
+- Enhanced cache loading and saving to use CacheBackend protocol
+- Improved error handling for cache operations with specific exceptions
 
 ### Fixed
 - Fixed duplicate imports in scanner.py
