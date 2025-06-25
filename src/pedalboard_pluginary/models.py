@@ -2,12 +2,12 @@
 """
 Dataclasses for representing plugin information.
 """
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Union, Dict, Optional, Any
+from __future__ import annotations
 
-# ParameterValue is what we store (after conversion from pedalboard's raw param value)
-ParameterValue = Union[float, bool, str]
+from dataclasses import dataclass, field
+from typing import Dict, Optional
+
+from .types import ParameterValue
 
 @dataclass
 class PluginParameter:
@@ -44,33 +44,3 @@ class PluginInfo:
     # E.g. `pedalboard.load_plugin(path, plugin_name=name_in_file)`
     name_in_file: Optional[str] = None
 
-    def __post_init__(self) -> None:
-        # Ensure path is stored as a string for easier JSON serialization
-        # Note: self.path is already typed as str, so this check is defensive
-        pass
-
-    # Consider adding methods for to_dict/from_dict if needed for complex serialization,
-    # though dataclasses.asdict and direct instantiation usually suffice.
-
-# Example usage:
-# if __name__ == "__main__":
-#     eq_param = PluginParameter(name="Frequency", value=1000.0)
-#     gain_param = PluginParameter(name="Gain", value=0.0)
-#     bypass_param = PluginParameter(name="Bypass", value=False)
-
-#     example_plugin = PluginInfo(
-#         id="vst3/AwesomeEQ",
-#         name="Awesome EQ",
-#         path="/path/to/AwesomeEQ.vst3",
-#         filename="AwesomeEQ.vst3",
-#         plugin_type="vst3",
-#         parameters={
-#             "Frequency": eq_param,
-#             "Gain": gain_param,
-#             "Bypass": bypass_param
-#         },
-#         manufacturer="MyPluginCompany"
-#     )
-#     import json
-#     from dataclasses import asdict
-#     print(json.dumps(asdict(example_plugin), indent=2))

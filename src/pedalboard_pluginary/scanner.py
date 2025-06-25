@@ -22,7 +22,7 @@ from .cache import SQLiteCacheBackend, JSONCacheBackend, migrate_json_to_sqlite
 from .exceptions import CacheCorruptedError, PluginScanError
 from .models import PluginInfo, PluginParameter
 from .progress import TqdmProgress
-from .protocols import ProgressReporter
+from .protocols import ProgressReporter, CacheBackend
 from .serialization import PluginSerializer
 from .utils import ensure_folder, from_pb_param
 
@@ -58,6 +58,9 @@ class PedalboardScanner:
         self.async_mode = async_mode
         self.max_concurrent = max_concurrent
         self.use_sqlite = use_sqlite
+        
+        # Cache backend will be initialized below
+        self.cache_backend: CacheBackend
         
         # Initialize cache paths
         self.ignores_path = get_cache_path("ignores")

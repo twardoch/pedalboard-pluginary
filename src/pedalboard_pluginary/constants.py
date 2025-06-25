@@ -1,6 +1,7 @@
 """
 Constants and configuration values for pedalboard_pluginary.
 """
+from __future__ import annotations
 
 from typing import Final
 

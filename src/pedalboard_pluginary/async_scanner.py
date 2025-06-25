@@ -1,6 +1,7 @@
 """
 Async scanner implementation for concurrent plugin scanning.
 """
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -10,7 +11,6 @@ from typing import AsyncIterator, List, Optional, TYPE_CHECKING
 from .constants import PLUGIN_LOAD_TIMEOUT
 from .models import PluginInfo
 from .protocols import ProgressReporter
-from .timeout import TimeoutError
 
 if TYPE_CHECKING:
     from .protocols import PluginScanner
@@ -131,19 +131,3 @@ class AsyncScannerMixin:
         return plugins
 
 
-class AsyncVST3Scanner(AsyncScannerMixin):
-    """VST3 scanner with async capabilities.
-    
-    This is a placeholder for the async VST3 scanner that will inherit
-    from both VST3Scanner and AsyncScannerMixin.
-    """
-    pass
-
-
-class AsyncAUScanner(AsyncScannerMixin):
-    """AU scanner with async capabilities.
-    
-    This is a placeholder for the async AU scanner that will inherit
-    from both AUScanner and AsyncScannerMixin.
-    """
-    pass

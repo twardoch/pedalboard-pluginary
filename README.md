@@ -10,6 +10,8 @@ _Pedalboard Pluginary_ is an independent Python-based package and command-line t
 
 With _Pedalboard Pluginary_, you can scan and list VST-3 and AU audio plugins installed on your machine, including their default parameters. 
 
+**Recent Improvements (January 2025)**: Major performance and architecture enhancements including async scanning, SQLite cache backend, and comprehensive code optimization. 
+
 - It automatically scans and catalogs VST-3 and AU plugins installed on your system.
 - Provides a command-line interface (CLI) for quick access to your plugin library.
 - Saves the plugin information in a JSON file. This file has the information about the plugin parameters and their default values. 

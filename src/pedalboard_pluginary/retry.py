@@ -1,6 +1,7 @@
 """
 Retry logic for handling transient failures.
 """
+from __future__ import annotations
 
 import functools
 import logging
@@ -71,26 +72,3 @@ def with_retry(
     return decorator
 
 
-def with_timeout(timeout: float) -> Callable[[F], F]:
-    """Decorator that adds a timeout to a function.
-    
-    Note: This is a placeholder for future implementation.
-    Proper timeout handling requires different approaches for
-    synchronous vs asynchronous functions.
-    
-    Args:
-        timeout: Timeout in seconds.
-        
-    Returns:
-        Decorated function.
-    """
-    def decorator(func: F) -> F:
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # TODO: Implement proper timeout handling
-            # For now, just pass through
-            return func(*args, **kwargs)
-        
-        return wrapper  # type: ignore[return-value]
-    
-    return decorator

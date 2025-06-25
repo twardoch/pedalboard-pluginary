@@ -1,0 +1,56 @@
+---
+description: Documents Unicode data transformations, validation, and error handling throughout the system
+globs: src/uicu/**/*.py,tests/**/*.py
+alwaysApply: false
+---
+
+
+# data-flow
+
+The Unicode data flow in this system consists of several key components:
+
+## Input Sources
+- PyICU: Primary source of Unicode data and transformations
+- fontTools.unicodedata: Supplementary Unicode data with writing system information
+
+## Transformation Stages
+1. Input Data Loading
+- Accepts Unicode strings through PyICU interfaces
+- Loads complementary writing system data from fontTools
+- Validates input encoding and format
+
+2. Core Processing
+- Performs Unicode normalization and decomposition
+- Applies character transformations 
+- Handles bidirectional text processing
+- Manages combining characters and diacritics
+
+3. Output Generation
+- Produces normalized Unicode output
+- Ensures consistent encoding
+- Validates output string integrity
+
+## Error Handling
+- Input validation checks encoding format
+- Unicode composition errors trigger graceful fallbacks
+- Invalid sequences raise custom exceptions
+
+## Edge Cases
+- Handles surrogate pairs and private use characters
+- Manages bidirectional text edge conditions
+- Processes unusual combining character sequences
+
+## Data Flow Path
+```
+PyICU/fontTools Input -> Validation -> Core Processing -> Output Validation -> Final Unicode Output
+```
+
+Key files containing data flow logic:
+- src/uicu/uicu.py: Main Unicode processing module
+- src/uicu/validators.py: Input/output validation
+- src/uicu/transforms.py: Character transformations
+- src/uicu/exceptions.py: Error handling
+
+$END$
+
+ If you're using this file in context, clearly say in italics in one small line that "Context added by Giga data-flow".

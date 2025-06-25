@@ -1,150 +1,103 @@
-# Pedalboard Pluginary - Implementation Roadmap
+# Pedalboard Pluginary - Streamlining TODO
 
-## Phase 1: Async Performance Revolution (Week 1-2)
+## Phase 1: Code Organization & Cleanup (Priority: High)
 
-### Async Scanner Architecture
-- [x] Create AsyncScannerMixin with concurrent plugin loading
-- [x] Implement AsyncVST3Scanner and AsyncAUScanner classes
-- [x] Add configurable concurrency limits in constants
-- [x] Update PedalboardScanner to support async mode
-- [ ] Benchmark performance improvements (target: 5-10x speedup)
+### Module Consolidation
+- [ ] Consolidate scanner classes into fewer, more focused modules
+- [ ] Merge utility functions scattered across multiple files
+- [ ] Reduce import complexity and circular dependencies
+- [ ] Simplify protocol definitions where appropriate
 
-### SQLite Cache Backend
-- [ ] Create cache package with SQLiteCacheBackend
-- [ ] Implement indexed search with full-text capabilities
-- [ ] Add lazy loading for large datasets
-- [ ] Create migration from JSON to SQLite
-- [ ] Add cache statistics and management commands
+### Remove Deprecated Code
+- [ ] Remove unused imports and dead code paths
+- [ ] Clean up legacy Fire-based CLI remnants  
+- [ ] Remove experimental features that aren't production-ready
+- [ ] Eliminate redundant type definitions
 
-### Smart Cache Invalidation
-- [ ] Create ChangeDetector for file-based change detection
-- [ ] Implement incremental scan functionality
-- [ ] Add modification time tracking
-- [ ] Create smart update logic for changed/added/removed plugins
+### Optimize Imports
+- [ ] Use `from __future__ import annotations` consistently
+- [ ] Minimize runtime imports using TYPE_CHECKING blocks
+- [ ] Group and organize imports systematically
+- [ ] Remove unused dependencies
 
-## Phase 2: Modern CLI Revolution (Week 3)
+## Phase 2: Performance Optimizations (Priority: High)
 
-### Migrate to Click + Rich
-- [ ] Replace Fire with Click for command structure
-- [ ] Add Rich for tables, progress bars, and formatting
+### SQLite Cache Optimizations
+- [ ] Optimize database schema and indexes
+- [ ] Add connection pooling for concurrent access
+- [ ] Implement prepared statements for frequent queries
+- [ ] Add SQLite pragmas for performance tuning
+- [ ] Implement cache warming strategies
+
+### Async Processing Improvements
+- [ ] Fine-tune concurrency limits based on system resources
+- [ ] Implement adaptive concurrency based on system load
+- [ ] Add memory-efficient streaming for large plugin sets
+- [ ] Optimize task scheduling and batching
+
+### Memory Management
+- [ ] Implement lazy loading patterns throughout
+- [ ] Add memory profiling and optimization
+- [ ] Use __slots__ for frequently instantiated classes
+- [ ] Optimize data structures for memory efficiency
+
+## Phase 3: CLI & User Experience (Priority: Medium)
+
+### Modern CLI Framework Migration
+- [ ] Migrate from Fire to Click for better structure
+- [ ] Add Rich for beautiful terminal output
 - [ ] Implement comprehensive help system
-- [ ] Add plugin search and filtering commands
-- [ ] Create cache management subcommands
+- [ ] Add command validation and error handling
+- [ ] Create intuitive command structure
 
-### Advanced Search and Filtering
-- [ ] Create PluginSearchEngine with multiple filter options
-- [ ] Implement fuzzy search using similarity matching
-- [ ] Add suggestion system for similar plugins
-- [ ] Create parameter-based filtering
-- [ ] Add sorting and pagination support
+### Search & Filtering Enhancement
+- [ ] Implement fuzzy search capabilities
+- [ ] Add advanced filtering options
+- [ ] Create search result ranking system
+- [ ] Add export/import functionality
+- [ ] Implement plugin recommendation system
 
-## Phase 3: Production Hardening (Week 4)
+## Phase 4: Developer Experience (Priority: Medium)
 
-### Comprehensive Testing Strategy
-- [ ] Create comprehensive integration test suite
-- [ ] Add performance benchmarks and regression tests
-- [ ] Test error scenarios and edge cases
-- [ ] Add cross-platform compatibility tests
-- [ ] Implement continuous integration with multiple Python versions
+### Testing Infrastructure
+- [ ] Add comprehensive integration tests
+- [ ] Implement performance regression tests
+- [ ] Add async testing utilities
+- [ ] Create test fixtures for various plugin types
+- [ ] Add property-based testing
 
-### Error Recovery and Resilience
-- [ ] Create ResilienceManager for error recovery
-- [ ] Implement plugin blacklisting for problematic plugins
-- [ ] Add safe cache operation wrappers
-- [ ] Create cache repair and validation functionality
-- [ ] Add health monitoring and status reporting
+### Documentation & Tooling
+- [ ] Streamline build system (build.sh optimization)
+- [ ] Update documentation to reflect current architecture
+- [ ] Add development setup automation
+- [ ] Create contributor guidelines
+- [ ] Add automated code quality checks
 
-## Phase 4: Advanced Features (Week 5-6)
+### Configuration Management
+- [ ] Add configuration file support
+- [ ] Implement environment variable configuration
+- [ ] Add configuration validation
+- [ ] Create configuration migration utilities
+- [ ] Add per-project configuration support
 
-### Configuration Management System
-- [ ] Create Pydantic-based settings with environment variable support
-- [ ] Add configuration file support (.env, config files)
-- [ ] Implement configuration validation and defaults
-- [ ] Create CLI commands for configuration management
+## Phase 5: Production Readiness (Priority: Low)
 
-### Plugin Categorization System
-- [ ] Create PluginCategory enum and categorization rules
-- [ ] Implement intelligent categorization based on names and parameters
-- [ ] Add category-based filtering and search
-- [ ] Create category statistics and reporting
+### Monitoring & Observability
+- [ ] Add structured logging throughout
+- [ ] Implement performance metrics collection
+- [ ] Add health check endpoints/commands
+- [ ] Create diagnostic utilities
+- [ ] Add cache health monitoring
 
-### Export and Integration Features
-- [ ] Implement CSV export functionality
-- [ ] Add JSON export with comprehensive metadata
-- [ ] Create plugin preset system
-- [ ] Add bulk import/export capabilities
-- [ ] Create DAW integration helpers
+### Error Recovery & Resilience
+- [ ] Enhance error recovery mechanisms
+- [ ] Add circuit breaker patterns for plugin loading
+- [ ] Implement graceful degradation
+- [ ] Add cache repair utilities
+- [ ] Create backup and restore functionality
 
-## Quality Gates
-
-### Phase 1 Completion Criteria
-- [ ] Async scanning 5x faster than sync
-- [ ] SQLite cache working for 1000+ plugins
-- [ ] Memory usage < 50MB baseline
-- [ ] Zero mypy errors maintained
-
-### Phase 2 Completion Criteria
-- [ ] New CLI fully replaces Fire-based interface
-- [ ] Rich output formatting working
-- [ ] All commands have comprehensive help
-- [ ] Search and filtering functional
-
-### Phase 3 Completion Criteria
-- [ ] >90% test coverage achieved
-- [ ] CI passing on all platforms (Windows, macOS, Linux)
-- [ ] Performance benchmarks in place
-- [ ] Error recovery working reliably
-
-### Phase 4 Completion Criteria
-- [ ] Plugin categorization working accurately
-- [ ] Export formats functional
-- [ ] Search capabilities fully implemented
-- [ ] Configuration system operational
-
-## Dependencies to Add
-
-### Core Dependencies
-- [ ] click>=8.0.0 (CLI framework)
-- [ ] rich>=13.0.0 (output formatting)
-- [ ] pydantic>=2.0.0 (configuration management)
-
-### Development Dependencies
-- [ ] pytest-benchmark (performance testing)
-- [ ] pytest-asyncio (async testing)
-- [ ] psutil (memory testing)
-
-## Success Metrics
-
-### Performance Targets
-- [ ] 10-20 plugins/second scan speed (vs 1-2 current)
-- [ ] O(log n) search performance (vs O(n) current)
-- [ ] Constant memory usage with lazy loading
-
-### Reliability Targets
-- [ ] Graceful error handling and recovery
-- [ ] 99%+ plugin compatibility
-- [ ] Zero data loss on crashes
-
-### Usability Targets
-- [ ] Intuitive CLI with comprehensive help
-- [ ] Rich formatting and progress reporting
-- [ ] Fast search and filtering capabilities
-
-## Current Status
-
-### ✅ Completed (Phase 0)
-- Type-safe architecture with comprehensive TypedDict and protocols
-- Modular scanner design with extensible BaseScanner
-- Robust error handling with custom exception hierarchy
-- Unified serialization layer with validation
-- Zero mypy errors in strict mode
-- Timeout protection for plugin loading
-
-### 🚧 In Progress
-- Planning and design for async implementation
-- Architecture review for performance improvements
-
-### 📋 Next Priority
-1. Implement async scanner architecture (highest impact)
-2. Create SQLite cache backend (scalability)
-3. Migrate to Click CLI framework (user experience)
+## Quick Wins (Week 1)
+- [ ] Code Cleanup: Remove dead code, optimize imports
+- [ ] SQLite Tuning: Add performance pragmas and optimize queries
+- [ ] Memory Optimization: Add __slots__ to key classes
+- [ ] Documentation: Update README and inline docs

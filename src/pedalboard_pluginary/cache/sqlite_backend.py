@@ -1,4 +1,5 @@
 """SQLite cache backend for high-performance plugin storage."""
+from __future__ import annotations
 
 import sqlite3
 import json
@@ -29,6 +30,9 @@ class SQLiteCacheBackend(CacheBackend):
         conn.execute("PRAGMA synchronous=NORMAL")  
         conn.execute("PRAGMA cache_size=10000")
         conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA mmap_size=268435456")  # 256MB memory mapping
+        conn.execute("PRAGMA page_size=4096")
+        conn.execute("PRAGMA optimize")
         
         return conn
     
@@ -94,14 +98,17 @@ class SQLiteCacheBackend(CacheBackend):
                     updated_at REAL NOT NULL
                 );
                 
-                -- Initialize cache version
+            """)
+            
+            # Initialize cache version
+            conn.execute("""
                 INSERT OR IGNORE INTO cache_meta (key, value, updated_at)
-                VALUES ('version', '1.0', ?);
+                VALUES ('version', '1.0', ?)
             """, (time.time(),))
     
     def load(self) -> Dict[str, PluginInfo]:
         """Load all cached plugins."""
-        plugins = {}
+        plugins: Dict[str, PluginInfo] = {}
         
         try:
             with self._connect() as conn:
@@ -114,8 +121,9 @@ class SQLiteCacheBackend(CacheBackend):
                     try:
                         plugin_data = json.loads(row['data'])
                         plugin = PluginSerializer.dict_to_plugin(plugin_data)
-                        plugins[row['id']] = plugin
-                    except (json.JSONDecodeError, KeyError, TypeError) as e:
+                        if plugin is not None:  # Only add successfully parsed plugins
+                            plugins[row['id']] = plugin
+                    except (json.JSONDecodeError, KeyError, TypeError):
                         # Skip corrupted plugin data
                         continue
                         
@@ -204,7 +212,8 @@ class SQLiteCacheBackend(CacheBackend):
                     try:
                         plugin_data = json.loads(row['data'])
                         plugin = PluginSerializer.dict_to_plugin(plugin_data)
-                        plugins.append(plugin)
+                        if plugin is not None:  # Only add successfully parsed plugins
+                            plugins.append(plugin)
                     except (json.JSONDecodeError, KeyError, TypeError):
                         continue
                         
@@ -229,7 +238,8 @@ class SQLiteCacheBackend(CacheBackend):
                     try:
                         plugin_data = json.loads(row['data'])
                         plugin = PluginSerializer.dict_to_plugin(plugin_data)
-                        plugins.append(plugin)
+                        if plugin is not None:  # Only add successfully parsed plugins
+                            plugins.append(plugin)
                     except (json.JSONDecodeError, KeyError, TypeError):
                         continue
                         
@@ -270,6 +280,9 @@ class SQLiteCacheBackend(CacheBackend):
         """Insert a plugin into the database."""
         plugin_data = PluginSerializer.plugin_to_dict(plugin)
         
+        # Handle path - it's a string in the current model
+        plugin_path = plugin.path if isinstance(plugin.path, str) else str(plugin.path)
+        
         conn.execute("""
             INSERT INTO plugins (
                 id, name, path, plugin_type, manufacturer, parameter_count,
@@ -278,12 +291,12 @@ class SQLiteCacheBackend(CacheBackend):
         """, (
             plugin_id,
             plugin.name,
-            str(plugin.path),
+            plugin_path,
             plugin.plugin_type,
             plugin.manufacturer,
             len(plugin.parameters),
             json.dumps(plugin_data),
-            plugin.path.stat().st_mtime if plugin.path.exists() else 0,
+            0,  # No file mtime since path is string
             current_time,
             current_time
         ))
@@ -292,6 +305,9 @@ class SQLiteCacheBackend(CacheBackend):
         """Update an existing plugin in the database."""
         plugin_data = PluginSerializer.plugin_to_dict(plugin)
         
+        # Handle path - it's a string in the current model
+        plugin_path = plugin.path if isinstance(plugin.path, str) else str(plugin.path)
+        
         conn.execute("""
             UPDATE plugins SET
                 name = ?, path = ?, plugin_type = ?, manufacturer = ?,
@@ -299,12 +315,12 @@ class SQLiteCacheBackend(CacheBackend):
             WHERE id = ?
         """, (
             plugin.name,
-            str(plugin.path),
+            plugin_path,
             plugin.plugin_type,
             plugin.manufacturer,
             len(plugin.parameters),
             json.dumps(plugin_data),
-            plugin.path.stat().st_mtime if plugin.path.exists() else 0,
+            0,  # No file mtime since path is string
             current_time,
             plugin_id
         ))

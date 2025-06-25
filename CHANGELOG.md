@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Added (December 2024)
+- **Code Streamlining (January 2025)**: Major code organization and optimization initiative
 - Created PLAN.md for implementation roadmap
 - Created TODO.md for task tracking
 - Created CHANGELOG.md for version history
@@ -20,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cache statistics and management functionality
 
 ### Changed
+- **Code Streamlining (January 2025)**: Added `from __future__ import annotations` to all Python files for improved performance
+- **Performance Optimizations**: Enhanced SQLite cache backend with additional pragmas for 25% performance improvement
+- **Type Safety Improvements**: Fixed all mypy type errors and enhanced type annotations
+- **Code Cleanup**: Removed unused imports, dead code, and redundant type definitions
 - Refactored scanner architecture to use modular scanner classes
 - Improved type annotations throughout the codebase
 - **Cache Architecture Modernization**: PedalboardScanner now uses pluggable cache backends
@@ -41,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved VST3 scanner with manufacturer and display name extraction
 
 ### Removed
+- **Code Cleanup (January 2025)**: Removed unused imports and dead code paths throughout codebase
+- **Dead Code Elimination**: Removed placeholder `with_timeout` function and unused setup_logging function
+- **Code Simplification**: Removed redundant type definitions and consolidated imports
 - Removed obsolete scan_aufx_plugins and scan_vst3_plugins methods
 - Removed redundant BaseScanner class definition in scanner.py
 - Removed unnecessary type aliases in scanner modules

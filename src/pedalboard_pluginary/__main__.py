@@ -1,58 +1,19 @@
 #!/usr/bin/env python3
-# benedict might also lack stubs.
-import json
-import logging  # For basicConfig
-import sys  # For sys.stdout in Display lambda
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from __future__ import annotations
+
+from typing import Dict, List, Optional
 
 import fire
 import yaml
 
-# fire library might not have complete type stubs, common to ignore if problematic for mypy.
-# Consider adding types-fire if available and it resolves issues.
-from benedict import benedict as bdict
-
-from .core import PedalboardPluginary
 from .data import (
     PLUGINS_CACHE_FILENAME_BASE,
     get_cache_path,
     load_json_file,
     save_json_file,
 )
-from .models import PluginInfo
 from .types import SerializedPlugin
 from .scanner import PedalboardScanner
-
-# Define a more specific type for extra_folders if it's always List[str] after split
-ExtraFoldersType = Optional[List[str]]
-
-
-def setup_logging(verbose_level: int = 0) -> None:
-    """Configures basic logging for CLI output."""
-    # verbose_level: 0 = WARNING, 1 = INFO, 2 = DEBUG
-    log_level = logging.WARNING
-    if verbose_level == 1:
-        log_level = logging.INFO
-    elif verbose_level >= 2:
-        log_level = logging.DEBUG
-
-    # Only configure if no handlers are already set (e.g., by tests or other imports)
-    # This basicConfig will go to stderr by default for WARNING and above.
-    # For INFO, let's direct to stdout for better CLI experience.
-    if not logging.getLogger().hasHandlers():
-        if log_level <= logging.INFO:
-            # For INFO and DEBUG, use a more verbose format and stdout
-            logging.basicConfig(
-                stream=sys.stdout,
-                level=log_level,
-                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            )
-        else:
-            # For WARNING, ERROR, CRITICAL, use stderr and simpler format
-            logging.basicConfig(
-                level=log_level, format="%(levelname)s: %(name)s: %(message)s"
-            )
 
 
 def scan_plugins_cli(extra_folders: Optional[str] = None, verbose: int = 0) -> None:

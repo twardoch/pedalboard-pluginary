@@ -1,9 +1,10 @@
 """
 Type definitions and aliases for the pedalboard_pluginary package.
 """
+from __future__ import annotations
 
-from typing import Union, Dict, Any, TypedDict, Optional
 import sys
+from typing import Union, Dict, Any, TypedDict, Optional
 
 if sys.version_info >= (3, 11):
     from typing import NotRequired
