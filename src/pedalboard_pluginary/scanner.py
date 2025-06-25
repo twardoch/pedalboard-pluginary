@@ -99,14 +99,14 @@ class PedalboardScanner:
     def load_data(self) -> None:
         """Load existing plugin data from cache."""
         try:
-            self.plugins = PluginSerializer.load_plugins(self.plugins_path)
-        except CacheCorruptedError as e:
+            self.plugins = self.cache_backend.load()
+        except Exception as e:
             logger.warning(f"Cache corrupted, will perform full scan: {e}")
             self.plugins = {}
 
     def save_data(self) -> None:
         """Save plugin data to cache."""
-        PluginSerializer.save_plugins(self.plugins, self.plugins_path)
+        self.cache_backend.save(self.plugins)
         
         # Save updated ignores
         save_json_file(list(self.ignores), self.ignores_path)
@@ -308,3 +308,64 @@ class PedalboardScanner:
             plugins_dict[key] = PluginSerializer.plugin_to_dict(plugin_info)
         
         return json.dumps(plugins_dict, indent=2)
+    
+    def search_plugins(self, query: str, limit: int = 50) -> List[PluginInfo]:
+        """Search plugins using full-text search (SQLite only).
+        
+        Args:
+            query: Search query string.
+            limit: Maximum number of results to return.
+            
+        Returns:
+            List of matching PluginInfo objects.
+        """
+        if isinstance(self.cache_backend, SQLiteCacheBackend):
+            return self.cache_backend.search(query, limit)
+        else:
+            # Fallback for JSON backend - simple name/manufacturer filtering
+            results = []
+            query_lower = query.lower()
+            for plugin in self.plugins.values():
+                if (query_lower in plugin.name.lower() or 
+                    (plugin.manufacturer and query_lower in plugin.manufacturer.lower())):
+                    results.append(plugin)
+                if len(results) >= limit:
+                    break
+            return results
+    
+    def filter_by_type(self, plugin_type: str) -> List[PluginInfo]:
+        """Filter plugins by type.
+        
+        Args:
+            plugin_type: Type of plugins to filter (e.g., 'vst3', 'au').
+            
+        Returns:
+            List of matching PluginInfo objects.
+        """
+        if isinstance(self.cache_backend, SQLiteCacheBackend):
+            return self.cache_backend.filter_by_type(plugin_type)
+        else:
+            # Fallback for JSON backend
+            return [plugin for plugin in self.plugins.values() 
+                   if plugin.plugin_type.lower() == plugin_type.lower()]
+    
+    def get_cache_stats(self) -> Dict[str, int]:
+        """Get cache statistics.
+        
+        Returns:
+            Dictionary with cache statistics.
+        """
+        if isinstance(self.cache_backend, SQLiteCacheBackend):
+            return self.cache_backend.get_stats()
+        else:
+            # Basic stats for JSON backend
+            stats = {'total_plugins': len(self.plugins)}
+            type_counts: Dict[str, int] = {}
+            for plugin in self.plugins.values():
+                plugin_type = plugin.plugin_type
+                type_counts[plugin_type] = type_counts.get(plugin_type, 0) + 1
+                
+            for plugin_type, count in type_counts.items():
+                stats[f"{plugin_type}_plugins"] = count
+                
+            return stats
