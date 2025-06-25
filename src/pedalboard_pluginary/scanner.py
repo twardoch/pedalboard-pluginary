@@ -3,8 +3,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import pedalboard  # type: ignore[import-untyped]
-from tqdm import tqdm  # type: ignore[import-untyped]
+import pedalboard
 
 from .data import (
     copy_default_ignores,
@@ -12,7 +11,10 @@ from .data import (
     load_ignores,
     save_json_file,
 )
+from .exceptions import CacheCorruptedError, PluginScanError
 from .models import PluginInfo, PluginParameter
+from .progress import TqdmProgress
+from .protocols import ProgressReporter
 from .scanners.au_scanner import AUScanner
 from .scanners.vst3_scanner import VST3Scanner
 from .serialization import PluginSerializer
@@ -28,13 +30,21 @@ class PedalboardScanner:
         self,
         ignore_paths: Optional[List[str]] = None,
         specific_paths: Optional[List[str]] = None,
+        progress_reporter: Optional[ProgressReporter] = None,
     ):
-        """Initialize the scanner with optional ignore paths and specific paths."""
+        """Initialize the scanner with optional ignore paths and specific paths.
+        
+        Args:
+            ignore_paths: List of regex patterns for paths to ignore.
+            specific_paths: List of specific paths to scan.
+            progress_reporter: Optional progress reporter instance.
+        """
         self.ignore_paths = ignore_paths or []
         self.specific_paths = specific_paths or []
         self.plugins: Dict[str, PluginInfo] = {}
         self.plugins_path = get_cache_path("plugins")
         self.ignores_path = get_cache_path("ignores")
+        self.progress_reporter = progress_reporter or TqdmProgress()
         
         # Initialize ignores
         copy_default_ignores(self.ignores_path)
@@ -55,7 +65,11 @@ class PedalboardScanner:
 
     def load_data(self) -> None:
         """Load existing plugin data from cache."""
-        self.plugins = PluginSerializer.load_plugins(self.plugins_path)
+        try:
+            self.plugins = PluginSerializer.load_plugins(self.plugins_path)
+        except CacheCorruptedError as e:
+            logger.warning(f"Cache corrupted, will perform full scan: {e}")
+            self.plugins = {}
 
     def save_data(self) -> None:
         """Save plugin data to cache."""
@@ -76,27 +90,36 @@ class PedalboardScanner:
             all_plugin_files.extend([(scanner, pf) for pf in plugin_files])
             total_files += len(plugin_files)
         
-        # Scan all plugins with progress bar
-        with tqdm(total=total_files, desc="Scanning plugins") as pbar:
-            for scanner, plugin_file in all_plugin_files:
-                plugin_key = f"{scanner.__class__.__name__.replace('Scanner', '').lower()}:{plugin_file}"
-                
-                # Skip ignored plugins
-                if plugin_key in self.ignores:
-                    logger.info(f"Skipping ignored plugin: {plugin_file}")
-                    pbar.update(1)
-                    continue
-                
-                try:
-                    plugin_info = scanner.scan_plugin(plugin_file)
-                    if plugin_info:
-                        self.plugins[plugin_info.id] = plugin_info
-                        logger.info(f"Scanned plugin: {plugin_file}")
-                except Exception as e:
-                    logger.error(f"Failed to scan plugin {plugin_file}: {e}")
-                    self.ignores.add(plugin_key)
-                
-                pbar.update(1)
+        # Scan all plugins with progress reporting
+        self.progress_reporter.start(total_files, "Scanning plugins")
+        
+        for scanner, plugin_file in all_plugin_files:
+            plugin_key = f"{scanner.__class__.__name__.replace('Scanner', '').lower()}:{plugin_file}"
+            
+            # Skip ignored plugins
+            if plugin_key in self.ignores:
+                logger.info(f"Skipping ignored plugin: {plugin_file}")
+                self.progress_reporter.update(1, f"Skipped: {plugin_file.name}")
+                continue
+            
+            try:
+                plugin_info = scanner.scan_plugin(plugin_file)
+                if plugin_info:
+                    self.plugins[plugin_info.id] = plugin_info
+                    logger.info(f"Scanned plugin: {plugin_file}")
+                    self.progress_reporter.update(1, f"Scanned: {plugin_info.name}")
+                else:
+                    self.progress_reporter.update(1)
+            except PluginScanError as e:
+                logger.error(f"Failed to scan plugin {plugin_file}: {e}")
+                self.ignores.add(plugin_key)
+                self.progress_reporter.update(1, f"Failed: {plugin_file.name}")
+            except Exception as e:
+                logger.error(f"Unexpected error scanning {plugin_file}: {e}")
+                self.ignores.add(plugin_key)
+                self.progress_reporter.update(1, f"Error: {plugin_file.name}")
+        
+        self.progress_reporter.finish(f"Scanned {len(self.plugins)} plugins")
         
         # Save the results
         self.save_data()
@@ -123,21 +146,30 @@ class PedalboardScanner:
             if plugin_key not in existing_plugins and plugin_key not in self.ignores:
                 plugins_to_scan.append((scanner, plugin_file, plugin_key))
         
-        # Scan new plugins with progress bar
+        # Scan new plugins with progress reporting
         if plugins_to_scan:
-            with tqdm(total=len(plugins_to_scan), desc="Scanning new plugins") as pbar:
-                for scanner, plugin_file, plugin_key in plugins_to_scan:
-                    try:
-                        plugin_info = scanner.scan_plugin(plugin_file)
-                        if plugin_info:
-                            self.plugins[plugin_info.id] = plugin_info
-                            new_plugins[plugin_info.id] = plugin_info
-                            logger.info(f"Scanned new plugin: {plugin_file}")
-                    except Exception as e:
-                        logger.error(f"Failed to scan plugin {plugin_file}: {e}")
-                        self.ignores.add(plugin_key)
-                    
-                    pbar.update(1)
+            self.progress_reporter.start(len(plugins_to_scan), "Scanning new plugins")
+            
+            for scanner, plugin_file, plugin_key in plugins_to_scan:
+                try:
+                    plugin_info = scanner.scan_plugin(plugin_file)
+                    if plugin_info:
+                        self.plugins[plugin_info.id] = plugin_info
+                        new_plugins[plugin_info.id] = plugin_info
+                        logger.info(f"Scanned new plugin: {plugin_file}")
+                        self.progress_reporter.update(1, f"Scanned: {plugin_info.name}")
+                    else:
+                        self.progress_reporter.update(1)
+                except PluginScanError as e:
+                    logger.error(f"Failed to scan plugin {plugin_file}: {e}")
+                    self.ignores.add(plugin_key)
+                    self.progress_reporter.update(1, f"Failed: {plugin_file.name}")
+                except Exception as e:
+                    logger.error(f"Unexpected error scanning {plugin_file}: {e}")
+                    self.ignores.add(plugin_key)
+                    self.progress_reporter.update(1, f"Error: {plugin_file.name}")
+            
+            self.progress_reporter.finish(f"Found {len(new_plugins)} new plugins")
             
             # Save updated data
             self.save_data()

@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import pedalboard  # type: ignore[import-untyped]
+import pedalboard
 
 from ..base_scanner import BaseScanner
 from ..constants import AU_EXTENSION, PLATFORM_MACOS, PLUGIN_TYPE_AU
@@ -148,7 +148,7 @@ class AUScanner(BaseScanner):
         try:
             # Try to load the plugin using pedalboard
             logger.debug(f"Loading AU plugin: {path}")
-            plugin = pedalboard.load_plugin(str(path))  # type: ignore[attr-defined]
+            plugin = pedalboard.load_plugin(str(path))
             
             # Extract parameters
             params: Dict[str, PluginParameter] = {}

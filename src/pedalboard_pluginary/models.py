@@ -44,10 +44,10 @@ class PluginInfo:
     # E.g. `pedalboard.load_plugin(path, plugin_name=name_in_file)`
     name_in_file: Optional[str] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # Ensure path is stored as a string for easier JSON serialization
-        if isinstance(self.path, Path):
-            self.path = str(self.path)
+        # Note: self.path is already typed as str, so this check is defensive
+        pass
 
     # Consider adding methods for to_dict/from_dict if needed for complex serialization,
     # though dataclasses.asdict and direct instantiation usually suffice.

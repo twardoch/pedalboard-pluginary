@@ -47,6 +47,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added cache versioning and metadata support
 - Improved type safety with TypedDict definitions
 - Centralized all JSON operations in serialization module
+- Created custom exception hierarchy for better error handling
+- Added constants module for configuration values
+- Implemented progress reporting abstraction with multiple backends
+- Added retry decorator for transient failures
+- Enhanced error handling throughout the codebase
+- Added py.typed marker for type checking support
+- Fixed most mypy type errors
+- Added typing-extensions dependency for Python 3.9 compatibility
+- Added tqdm as explicit dependency
+- Implemented CallbackProgress, LogProgress, and NoOpProgress reporters
+- Added proper type annotations throughout the codebase
+- Replaced generic exceptions with specific custom exceptions
+- Added retry logic infrastructure for transient failures
+- Improved cache error handling with specific exceptions
+- Updated all scanners to use constants instead of magic strings
 
 ## [1.1.0] - Previous Release
 

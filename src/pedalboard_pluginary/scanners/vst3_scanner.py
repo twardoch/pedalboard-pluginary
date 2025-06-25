@@ -8,7 +8,7 @@ import platform
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import pedalboard  # type: ignore[import-untyped]
+import pedalboard
 
 from ..base_scanner import BaseScanner
 from ..constants import PLUGIN_TYPE_VST3, VST3_EXTENSION
@@ -114,7 +114,7 @@ class VST3Scanner(BaseScanner):
         try:
             # Load the plugin to get its parameters
             logger.debug(f"Loading VST3 plugin: {path}")
-            plugin = pedalboard.load_plugin(str(path))  # type: ignore[attr-defined]
+            plugin = pedalboard.load_plugin(str(path))
             
             # Extract parameters
             params: Dict[str, PluginParameter] = {}

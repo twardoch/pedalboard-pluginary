@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import fire
-import yaml  # type: ignore[import-not-found]
+import yaml
 
 # fire library might not have complete type stubs, common to ignore if problematic for mypy.
 # Consider adding types-fire if available and it resolves issues.
-from benedict import benedict as bdict  # type: ignore[import-untyped]
+from benedict import benedict as bdict
 
 from .core import PedalboardPluginary
 from .data import (
@@ -69,12 +69,13 @@ def update_plugins_cli(extra_folders: Optional[str] = None, verbose: int = 0) ->
     scan_plugins_cli(extra_folders, verbose)
 
 
-def list_json_cli() -> Dict:
+def list_json_cli() -> Dict[Any, Any]:
     """Lists all plugins in JSON format."""
     cache_file = get_cache_path(PLUGINS_CACHE_FILENAME_BASE)
     if not cache_file.exists():
         return {}
-    return load_json_file(cache_file)
+    data = load_json_file(cache_file)
+    return data if isinstance(data, dict) else {}
 
 
 def list_yaml_cli() -> str:
@@ -83,7 +84,7 @@ def list_yaml_cli() -> str:
     return yaml.dump(plugins, sort_keys=False, indent=2)
 
 
-def main():
+def main() -> None:
     """Main entry point for the CLI."""
     fire.Fire({
         "scan": scan_plugins_cli,
