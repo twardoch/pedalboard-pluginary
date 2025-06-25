@@ -14,9 +14,11 @@ from .constants import DEFAULT_MAX_CONCURRENT
 from .data import (
     copy_default_ignores,
     get_cache_path,
+    get_sqlite_cache_path,
     load_ignores,
     save_json_file,
 )
+from .cache import SQLiteCacheBackend, JSONCacheBackend, migrate_json_to_sqlite
 from .exceptions import CacheCorruptedError, PluginScanError
 from .models import PluginInfo, PluginParameter
 from .progress import TqdmProgress
@@ -37,6 +39,7 @@ class PedalboardScanner:
         progress_reporter: Optional[ProgressReporter] = None,
         async_mode: bool = False,
         max_concurrent: int = DEFAULT_MAX_CONCURRENT,
+        use_sqlite: bool = True,
     ):
         """Initialize the scanner with optional ignore paths and specific paths.
         
@@ -46,15 +49,35 @@ class PedalboardScanner:
             progress_reporter: Optional progress reporter instance.
             async_mode: Whether to use async scanning for better performance.
             max_concurrent: Maximum number of concurrent scans (async mode only).
+            use_sqlite: Whether to use SQLite cache backend (default: True).
         """
         self.ignore_paths = ignore_paths or []
         self.specific_paths = specific_paths or []
         self.plugins: Dict[str, PluginInfo] = {}
-        self.plugins_path = get_cache_path("plugins")
-        self.ignores_path = get_cache_path("ignores")
         self.progress_reporter = progress_reporter or TqdmProgress()
         self.async_mode = async_mode
         self.max_concurrent = max_concurrent
+        self.use_sqlite = use_sqlite
+        
+        # Initialize cache paths
+        self.ignores_path = get_cache_path("ignores")
+        
+        # Initialize cache backend
+        if use_sqlite:
+            self.sqlite_path = get_sqlite_cache_path("plugins")
+            self.json_path = get_cache_path("plugins")  # For migration
+            self.cache_backend = SQLiteCacheBackend(self.sqlite_path)
+            
+            # Migrate from JSON if SQLite doesn't exist but JSON does
+            if not self.sqlite_path.exists() and self.json_path.exists():
+                try:
+                    migrated_count = migrate_json_to_sqlite(self.json_path, self.sqlite_path)
+                    logger.info(f"Migrated {migrated_count} plugins from JSON to SQLite cache")
+                except Exception as e:
+                    logger.warning(f"Migration failed, starting with empty SQLite cache: {e}")
+        else:
+            self.json_path = get_cache_path("plugins")
+            self.cache_backend = JSONCacheBackend(self.json_path)
         
         # Initialize ignores
         copy_default_ignores(self.ignores_path)

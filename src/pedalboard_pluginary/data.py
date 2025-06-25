@@ -16,7 +16,7 @@ APP_NAME: str = "com.twardoch.pedalboard-pluginary"
 PLUGINS_CACHE_FILENAME_BASE: str = "plugins"  # To identify the plugins cache file
 
 
-def get_cache_path(cache_name: str) -> Path:
+def get_cache_path(cache_name: str, extension: str = "json") -> Path:
     """Get the path to a cache file."""
     os_name = platform.system()
     if os_name == "Windows":
@@ -37,7 +37,12 @@ def get_cache_path(cache_name: str) -> Path:
             app_data_dir = Path.home() / ".cache" / APP_NAME
 
     app_data_dir.mkdir(parents=True, exist_ok=True)  # Ensure base app dir exists
-    return app_data_dir / f"{cache_name}.json"
+    return app_data_dir / f"{cache_name}.{extension}"
+
+
+def get_sqlite_cache_path(cache_name: str) -> Path:
+    """Get the path to a SQLite cache database."""
+    return get_cache_path(cache_name, "db")
 
 
 def load_json_file(file_path: Path) -> Any:
