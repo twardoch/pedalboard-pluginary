@@ -26,6 +26,8 @@ logger = logging.getLogger("Scanner")
 class PedalboardScanner:
     RE_AUFX = re.compile(r"aufx\s+(\w+)\s+(\w+)\s+-\s+(.*?):\s+(.*?)\s+\((.*?)\)")
 
+import shutil # Added import
+
     def __init__(self):
         self.plugins_path = get_cache_path("plugins")
         self.plugins = {}
@@ -34,7 +36,10 @@ class PedalboardScanner:
 
     def ensure_ignores(self):
         self.ignores_path = get_cache_path("ignores")
-        if not self.ignores_path.exists():
+        if self.ignores_path.is_dir(): # If it exists as a directory
+            logger.warning(f"'{self.ignores_path}' is a directory, removing it.")
+            shutil.rmtree(self.ignores_path) # Remove the directory
+        if not self.ignores_path.exists(): # Now, if it doesn't exist (as file or dir)
             copy_default_ignores(self.ignores_path)
         self.ignores = load_ignores(self.ignores_path)
 

@@ -50,6 +50,7 @@ dev = [
     "flake8>=7.0.0",
     "black>=24.1.1",
     "isort>=5.13.2",
+    "psutil>=5.9.0", # Added for memory profiling in tests
 ]
 
 [project.scripts]

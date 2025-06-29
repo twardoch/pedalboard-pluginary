@@ -26,7 +26,7 @@ def list_yaml():
     return bdict(PedalboardPluginary().plugins).to_yaml()
 
 
-def cli():
+def main(): # Renamed from cli
     fire.core.Display = lambda lines, out: print(*lines, file=out)
     fire.Fire(
         {
@@ -40,4 +40,4 @@ def cli():
 
 
 if __name__ == "__main__":
-    cli()
+    main() # Renamed from cli()
