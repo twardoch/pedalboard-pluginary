@@ -13,21 +13,20 @@ from pedalboard_pluginary.models import PluginInfo, PluginParameter
 
 def create_test_plugin(plugin_id: str, name: str, manufacturer: str = "TestMfg") -> PluginInfo:
     """Create a test plugin for benchmarking."""
+    plugin_path_obj = Path(f"/test/path/{name.replace(' ', '_')}.plugin")
     return PluginInfo(
         id=plugin_id,
         name=name,
-        path=Path(f"/test/path/{name.replace(' ', '_')}.plugin"),
+        path=str(plugin_path_obj), # Path should be a string
+        filename=plugin_path_obj.name,
         plugin_type="test",
         manufacturer=manufacturer,
-        parameters=[
-            PluginParameter(
+        parameters={
+            f"param_{i}": PluginParameter(
                 name=f"param_{i}",
-                default_value=float(i),
-                min_value=0.0,
-                max_value=100.0,
                 value=float(i)
             ) for i in range(10)  # 10 parameters per plugin
-        ]
+        }
     )
 
 

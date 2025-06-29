@@ -7,11 +7,12 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 import pytest
 
-from pedalboard_pluginary.data import APP_NAME, PLUGINS_CACHE_FILENAME_BASE, get_cache_path
+from pedalboard_pluginary.constants import APP_NAME, PLUGINS_CACHE_FILENAME
+from pedalboard_pluginary.data import get_cache_path
 
 # Helper to get the cache file path for plugins
 def get_plugins_cache_file():
-    return get_cache_path(PLUGINS_CACHE_FILENAME_BASE)
+    return get_cache_path(PLUGINS_CACHE_FILENAME)
 
 @pytest.fixture(autouse=True)
 def manage_plugin_cache():
@@ -65,16 +66,16 @@ MOCK_PLUGIN_DATA = {
 }
 
 # This mock will replace the actual PedalboardScanner instance or its methods
-@patch('pedalboard_pluginary.scanner.PedalboardScanner.scan_all_plugins')
-@patch('pedalboard_pluginary.scanner.PedalboardScanner.update_scan') # Also mock update_scan
+@patch('pedalboard_pluginary.scanner.PedalboardScanner.scan') # Patched to 'scan' as it's called by rescan
+@patch('pedalboard_pluginary.scanner.PedalboardScanner.update') # Patched to 'update'
 @patch('pedalboard_pluginary.scanner.PedalboardScanner.save_plugins') # Mock save_plugins
 @patch('pedalboard_pluginary.core.PedalboardPluginary.load_data') # Mock load_data in core
 def run_cli_command(
     cli_args_list,
-    mock_core_load_data,
-    mock_scanner_save_plugins,
-    mock_scanner_update_scan,
-    mock_scanner_scan_all,
+    mock_core_load_data_mock, # Original mock object for core.PedalboardPluginary.load_data
+    mock_scanner_save_plugins_mock, # Original mock object for scanner.PedalboardScanner.save_plugins
+    mock_scanner_update_mock, # Original mock object for scanner.PedalboardScanner.update
+    mock_scanner_scan_mock, # Original mock object for scanner.PedalboardScanner.scan
     expected_exit_code=0
 ):
     """Helper to run CLI commands and capture output."""
@@ -89,8 +90,8 @@ def run_cli_command(
         # They modify self.plugins and then call self.save_plugins.
         # We've mocked save_plugins separately.
 
-    mock_scanner_scan_all.side_effect = side_effect_scan_or_update
-    mock_scanner_update_scan.side_effect = side_effect_scan_or_update
+    mock_scanner_scan_mock.side_effect = side_effect_scan_or_update
+    mock_scanner_update_mock.side_effect = side_effect_scan_or_update
 
     # Mock load_data to set the plugins attribute on an instance if needed,
     # or simply prevent it from trying to load a real file during list commands
@@ -165,10 +166,10 @@ def test_cli_list(mock_load_json, capsys):
 
     # Run the 'list' command
     # Using direct function call to avoid subprocess complexity with stdout/stderr and fire's display hook
-    from pedalboard_pluginary.__main__ import list_json_cli
+    from pedalboard_pluginary.__main__ import list_json # Corrected to list_json
 
     # Fire's Display hook is tricky to test with subprocess.run, so call directly.
-    # list_json_cli returns a string.
+    # list_json returns a dict which fire then processes.
     # We need to ensure that when `pbpluginary list` is run, this function is called
     # and its output (which is JSON string) is printed.
     # For simplicity here, just test the function that `fire` would call.
@@ -254,7 +255,7 @@ def test_cli_update(MockScannerConstructorForUpdate):
         # For this test, assume it behaves like scan if no cache.
         with open(cache_file, 'w') as f:
             json.dump(MOCK_PLUGIN_DATA, f, indent=4) # For simplicity, same as scan
-    mock_scanner_instance.update_scan.side_effect = mock_update_scan_writes_cache
+    mock_scanner_instance.update.side_effect = mock_update_scan_writes_cache # Changed update_scan to update
 
     result = run_cli_command(["update"]) # Uses patches from run_cli_command
 
@@ -264,7 +265,7 @@ def test_cli_update(MockScannerConstructorForUpdate):
         data_from_cache = json.load(f)
     assert data_from_cache == MOCK_PLUGIN_DATA # Assuming update wrote this
 
-    mock_scanner_instance.update_scan.assert_called_once()
+    mock_scanner_instance.update.assert_called_once() # Changed update_scan to update
 
 
 # TODO: Test for verbose logging options (--verbose=1, --verbose=2)
