@@ -1,55 +1,291 @@
-name: Python package CI
+name: CI/CD Pipeline
 
 on:
   push:
     branches: [main]
     tags: ['v*']
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
+env:
+  PYTHON_VERSION: '3.9'
+  PYTHON_VERSIONS: '["3.9", "3.10", "3.11", "3.12"]'
+
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
+  test:
+    name: Test on ${{ matrix.os }} with Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ['3.9', '3.10', '3.11']
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Needed for version detection
+
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
+
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ matrix.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
+        restore-keys: |
+          ${{ matrix.os }}-pip-${{ matrix.python-version }}-
+          ${{ matrix.os }}-pip-
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install fire pytest pytest-cov # Added pytest-cov for coverage
-    - name: Run tests with coverage
+        pip install -e ".[dev]"
+        pip install build twine
+
+    - name: Check code formatting
       run: |
-        python -m pip install -e .
-        # Pytest is configured in pyproject.toml to run with --cov
-        # and output to term-missing. It also creates .coverage file.
-        pytest
+        python -m black --check src/pedalboard_pluginary tests/
+        python -m isort --check-only src/pedalboard_pluginary tests/
+
+    - name: Run linting
+      run: |
+        python -m flake8 src/pedalboard_pluginary tests/
+
+    - name: Run type checking
+      run: |
+        python -m mypy src/pedalboard_pluginary
+
+    - name: Run tests
+      run: |
+        pytest tests/ -v --cov=pedalboard_pluginary --cov-report=xml --cov-report=term-missing --cov-fail-under=80
+      env:
+        PYTHONPATH: src
+
     - name: Upload coverage to Codecov
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.9'
       uses: codecov/codecov-action@v3
       with:
-        # token: ${{ secrets.CODECOV_TOKEN }} # Only if needed for private repos or specific cases
-        fail_ci_if_error: true # Optional: fail CI if coverage upload fails
+        file: ./coverage.xml
+        fail_ci_if_error: true
 
-  publish:
-    needs: build-and-test
-    if: startsWith(github.ref, 'refs/tags/')
+    - name: Test installation
+      run: |
+        python -m pip install -e .
+        pbpluginary --help
+
+  build:
+    name: Build package
     runs-on: ubuntu-latest
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/')
+
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.9'
-    - name: Build and publish
-      env:
-        TWINE_USERNAME: __token__
-        TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install build dependencies
       run: |
-        python -m pip install --upgrade build twine
+        python -m pip install --upgrade pip
+        pip install build twine
+
+    - name: Build package
+      run: |
         python -m build
-        twine upload dist/*
+
+    - name: Check package
+      run: |
+        python -m twine check dist/*
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: python-package
+        path: dist/
+
+  build-binaries:
+    name: Build binary for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: pedalboard-pluginary-linux-x64
+            binary_name: pbpluginary
+          - os: windows-latest
+            artifact_name: pedalboard-pluginary-windows-x64
+            binary_name: pbpluginary.exe
+          - os: macos-latest
+            artifact_name: pedalboard-pluginary-macos-x64
+            binary_name: pbpluginary
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+        pip install pyinstaller
+
+    - name: Build binary
+      run: |
+        pyinstaller --onefile --name ${{ matrix.binary_name }} --console src/pedalboard_pluginary/__main__.py
+
+    - name: Test binary (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        ./dist/${{ matrix.binary_name }} --help
+
+    - name: Test binary (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        .\dist\${{ matrix.binary_name }} --help
+
+    - name: Upload binary artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: dist/${{ matrix.binary_name }}
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [test, build]
+    if: startsWith(github.ref, 'refs/tags/')
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pedalboard-pluginary
+
+    steps:
+    - name: Download build artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: python-package
+        path: dist/
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        user: __token__
+        password: ${{ secrets.PYPI_API_TOKEN }}
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [test, build, build-binaries, publish-pypi]
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get version from tag
+      id: get_version
+      run: echo "VERSION=${GITHUB_REF/refs\/tags\/v/}" >> $GITHUB_OUTPUT
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Create release notes
+      id: release_notes
+      run: |
+        # Extract release notes from CHANGELOG.md
+        VERSION=${{ steps.get_version.outputs.VERSION }}
+        echo "Extracting release notes for version $VERSION"
+        
+        # Create basic release notes
+        echo "## Release $VERSION" > release_notes.md
+        echo "" >> release_notes.md
+        echo "### Installation" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "#### Python Package" >> release_notes.md
+        echo '```bash' >> release_notes.md
+        echo "pip install pedalboard-pluginary==$VERSION" >> release_notes.md
+        echo '```' >> release_notes.md
+        echo "" >> release_notes.md
+        echo "#### Binary Downloads" >> release_notes.md
+        echo "Download the appropriate binary for your platform from the assets below." >> release_notes.md
+        echo "" >> release_notes.md
+        echo "### Changes" >> release_notes.md
+        echo "See [CHANGELOG.md](https://github.com/twardoch/pedalboard-pluginary/blob/main/CHANGELOG.md) for detailed changes." >> release_notes.md
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref }}
+        name: Release ${{ steps.get_version.outputs.VERSION }}
+        body_path: release_notes.md
+        draft: false
+        prerelease: false
+        files: |
+          python-package/*
+          pedalboard-pluginary-linux-x64/*
+          pedalboard-pluginary-windows-x64/*
+          pedalboard-pluginary-macos-x64/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Update release with checksums
+      run: |
+        # Generate checksums for all artifacts
+        echo "## Checksums" > checksums.md
+        echo "" >> checksums.md
+        echo "### Python Package" >> checksums.md
+        echo '```' >> checksums.md
+        cd python-package
+        sha256sum * >> ../checksums.md
+        cd ..
+        echo '```' >> checksums.md
+        echo "" >> checksums.md
+        echo "### Binaries" >> checksums.md
+        echo '```' >> checksums.md
+        find . -name "pbpluginary*" -type f -exec sha256sum {} \; >> checksums.md
+        echo '```' >> checksums.md
+
+    - name: Comment on release with checksums
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const checksums = fs.readFileSync('checksums.md', 'utf8');
+          
+          // Get the release
+          const release = await github.rest.repos.getReleaseByTag({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            tag: context.ref.replace('refs/tags/', '')
+          });
+          
+          // Update release body with checksums
+          await github.rest.repos.updateRelease({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            release_id: release.data.id,
+            body: release.data.body + '\n\n' + checksums
+          });
