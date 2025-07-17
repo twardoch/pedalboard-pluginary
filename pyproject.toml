@@ -2,12 +2,9 @@
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
-[tool.setuptools_scm]
-version_scheme = "no-guess-dev"
-
 [project]
 name = "pedalboard-pluginary"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A plugin scanner for Pedalboard"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -51,6 +48,9 @@ dev = [
     "black>=24.1.1",
     "isort>=5.13.2",
     "psutil>=5.9.0", # Added for memory profiling in tests
+    "build>=0.10.0",
+    "twine>=4.0.0",
+    "pyinstaller>=5.0.0",
 ]
 
 [project.scripts]
@@ -102,3 +102,21 @@ include = '\.pyi?$'
 [tool.isort]
 profile = "black"
 multi_line_output = 3
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/pedalboard_pluginary/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pedalboard_pluginary"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/README.md",
+    "/LICENSE.txt",
+    "/CHANGELOG.md",
+]

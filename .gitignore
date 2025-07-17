@@ -54,3 +54,33 @@ MANIFEST
 .venv*/
 .conda*/
 .python-version
+
+# PyInstaller
+*.spec
+
+# Version file (auto-generated)
+src/pedalboard_pluginary/_version.py
+
+# Development files
+.mypy_cache/
+.ruff_cache/
+
+# OS-specific files
+Thumbs.db
+*.lnk
+
+# IDE-specific files
+*.swp
+*.swo
+*~
+
+# Test artifacts
+.coverage.*
+.pytest_cache/
+htmlcov/
+.tox/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
