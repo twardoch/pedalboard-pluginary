@@ -7,64 +7,136 @@ from .core import PedalboardPluginary
 from .scanner import PedalboardScanner
 
 
-def get_scanner(parallel=False, isolated=False, workers=None):
-    """Factory method to get appropriate scanner instance."""
+def get_scanner(isolated=False, workers=4, verbose=False):
+    """Factory method to get appropriate scanner instance.
+    
+    Args:
+        isolated: Use completely isolated scanner (recommended)
+        workers: Number of worker processes (default=4)
+        verbose: Enable verbose output
+    """
     if isolated:
         # Use completely isolated scanner (recommended)
         from .scanner_isolated import IsolatedPedalboardScanner
-        return IsolatedPedalboardScanner(max_workers=workers)
-    elif parallel:
-        try:
-            from .scanner_parallel import ParallelPedalboardScanner
-            return ParallelPedalboardScanner(max_workers=workers)
-        except ImportError:
-            print("Warning: Parallel scanner not available, using standard scanner")
-            return PedalboardScanner()
+        return IsolatedPedalboardScanner(max_workers=workers, verbose=verbose)
     else:
         return PedalboardScanner()
 
 
-def scan_plugins(extra_folders=None, parallel=False, isolated=True, workers=None, verbose=False):
+def scan_plugins(extra_folders=None, workers=4, verbose=False):
     """Scan all plugins.
     
     Args:
         extra_folders: Comma-separated list of additional folders to scan
-        parallel: Use parallel scanner (deprecated, use --isolated)
         isolated: Use completely isolated scanner (recommended, default=True)
-        workers: Number of worker processes for parallel scanning
+        workers: Number of worker processes (default=4)
         verbose: Show verbose output
     """
     if verbose:
         import logging
-        logging.basicConfig(level=logging.DEBUG)
-        print(f"Verbose mode enabled")
-        print(f"Isolated: {isolated}, Parallel: {parallel}, Workers: {workers}")
+        from rich.console import Console
+        import sys
+        
+        # Setup comprehensive logging
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        
+        console = Console()
+        console.print("[bold cyan]═══ VERBOSE MODE ENABLED ═══[/bold cyan]")
+        console.print(f"[yellow]Configuration:[/yellow]")
+        console.print(f"  • Mode: [green]{'Parallel isolated' if workers > 1 else 'Single-threaded'}[/green]")
+        console.print(f"  • Worker processes: [green]{workers}[/green]")
+        console.print(f"  • Extra folders: [green]{extra_folders if extra_folders else 'None'}[/green]")
+        console.print(f"  • Cache location: [blue]{os.path.expanduser('~/.pedalboard_pluginary')}[/blue]")
+        console.print("[dim]────────────────────────────[/dim]\n")
+        
+        # Enable debug logging for all pedalboard_pluginary modules
+        loggers = [
+            'pedalboard_pluginary',
+            'pedalboard_pluginary.scanner',
+            'pedalboard_pluginary.scanner_isolated',
+            'pedalboard_pluginary.scanner_worker',
+            'pedalboard_pluginary.cache',
+            'pedalboard_pluginary.core'
+        ]
+        for logger_name in loggers:
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(logging.DEBUG)
+            
     if extra_folders:
         if isinstance(extra_folders, str):
             extra_folders = extra_folders.split(",")
         elif not isinstance(extra_folders, list):
             extra_folders = None
     
-    scanner = get_scanner(parallel=parallel, isolated=isolated, workers=workers)
+    scanner = get_scanner(workers=workers, verbose=verbose)
+    
+    if verbose:
+        console.print(f"[cyan]Starting scan with {scanner.__class__.__name__}...[/cyan]\n")
+    
     scanner.rescan(extra_folders=extra_folders)
 
 
-def update_plugins(extra_folders=None, parallel=False, isolated=True, workers=None):
+def update_plugins(extra_folders=None, workers=4, verbose=False):
     """Update plugin cache with new plugins only.
     
     Args:
         extra_folders: Comma-separated list of additional folders to scan
-        parallel: Use parallel scanner (deprecated, use --isolated)
         isolated: Use completely isolated scanner (recommended, default=True)
-        workers: Number of worker processes for parallel scanning
+        workers: Number of worker processes (default=4)
+        verbose: Show verbose output
     """
+    if verbose:
+        import logging
+        from rich.console import Console
+        import sys
+        
+        # Setup comprehensive logging
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        
+        console = Console()
+        console.print("[bold cyan]═══ VERBOSE MODE ENABLED (UPDATE) ═══[/bold cyan]")
+        console.print(f"[yellow]Configuration:[/yellow]")
+        console.print(f"  • Mode: [green]{'Parallel isolated' if workers > 1 else 'Single-threaded'}[/green]")
+        console.print(f"  • Worker processes: [green]{workers}[/green]")
+        console.print(f"  • Extra folders: [green]{extra_folders if extra_folders else 'None'}[/green]")
+        console.print("[dim]────────────────────────────[/dim]\n")
+        
+        # Enable debug logging for all pedalboard_pluginary modules
+        loggers = [
+            'pedalboard_pluginary',
+            'pedalboard_pluginary.scanner',
+            'pedalboard_pluginary.scanner_isolated',
+            'pedalboard_pluginary.scanner_worker',
+            'pedalboard_pluginary.cache',
+            'pedalboard_pluginary.core'
+        ]
+        for logger_name in loggers:
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(logging.DEBUG)
+            
     if extra_folders:
         if isinstance(extra_folders, str):
             extra_folders = extra_folders.split(",")
         elif not isinstance(extra_folders, list):
             extra_folders = None
     
-    scanner = get_scanner(parallel=parallel, isolated=isolated, workers=workers)
+    scanner = get_scanner(workers=workers, verbose=verbose)
+    
+    if verbose:
+        console.print(f"[cyan]Starting update with {scanner.__class__.__name__}...[/cyan]\n")
+    
     scanner.update(extra_folders=extra_folders)
 
 

@@ -38,7 +38,7 @@ logger = logging.getLogger("IsolatedScanner")
 console = Console()
 
 
-def scan_plugin_isolated(plugin_path: str, plugin_name: str, plugin_type: str, timeout: int = 30) -> dict:
+def scan_plugin_isolated(plugin_path: str, plugin_name: str, plugin_type: str, timeout: int = 30, verbose: bool = False) -> dict:
     """
     Scan a single plugin in complete isolation using subprocess.
     
@@ -62,6 +62,9 @@ def scan_plugin_isolated(plugin_path: str, plugin_name: str, plugin_type: str, t
             plugin_type
         ]
         
+        if verbose:
+            logger.debug(f"Executing isolated scan: {' '.join(cmd)}")
+        
         # Run with timeout and capture output
         result = subprocess.run(
             cmd,
@@ -70,6 +73,9 @@ def scan_plugin_isolated(plugin_path: str, plugin_name: str, plugin_type: str, t
             timeout=timeout,
             env={**os.environ, 'PYTHONWARNINGS': 'ignore'}
         )
+        
+        if verbose and result.stderr:
+            logger.debug(f"Scan stderr for {plugin_name}: {result.stderr}")
         
         if result.stdout:
             try:
@@ -114,13 +120,21 @@ class IsolatedPedalboardScanner:
     
     RE_AUFX = re.compile(r"aufx\s+(\w+)\s+(\w+)\s+-\s+(.*?):\s+(.*?)\s+\((.*?)\)")
     
-    def __init__(self, max_workers: Optional[int] = None, timeout: int = 30):
+    def __init__(self, max_workers: Optional[int] = None, timeout: int = 30, verbose: bool = False):
         self.plugins_path = get_cache_path("plugins")
         self.plugins = {}
         self.failed_plugins = {}
         self.max_workers = max_workers or min(mp.cpu_count(), 8)
         self.timeout = timeout
+        self.verbose = verbose
         self.ensure_ignores()
+        
+        if self.verbose:
+            logger.setLevel(logging.DEBUG)
+            console.print(f"[dim]IsolatedPedalboardScanner initialized:[/dim]")
+            console.print(f"  [dim]• Max workers: {self.max_workers}[/dim]")
+            console.print(f"  [dim]• Timeout: {self.timeout}s[/dim]")
+            console.print(f"  [dim]• Cache path: {self.plugins_path}[/dim]")
         
     def ensure_ignores(self):
         """Ensure ignores file exists."""
@@ -260,7 +274,8 @@ class IsolatedPedalboardScanner:
                         str(path), 
                         name, 
                         plugin_type,
-                        self.timeout
+                        self.timeout,
+                        self.verbose
                     )
                     future_to_task[future] = (path, name, plugin_type, vendor)
                 
@@ -336,52 +351,78 @@ class IsolatedPedalboardScanner:
         plugin_tasks = []
         
         # VST3 plugins
-        for plugin_path in self._find_vst3_plugins(extra_folders=extra_folders):
+        vst3_plugins = self._find_vst3_plugins(extra_folders=extra_folders)
+        if self.verbose and vst3_plugins:
+            console.print(f"[dim]Getting names for {len(vst3_plugins)} VST3 plugins...[/dim]")
+        
+        for plugin_path in vst3_plugins:
             try:
                 # Get plugin names without loading the plugin
                 # Use repr to safely pass the path
                 path_str = str(plugin_path)
                 code = f"import pedalboard; names = pedalboard.VST3Plugin.get_plugin_names_for_file({repr(path_str)}); print('\\n'.join(names))"
                 
+                if self.verbose:
+                    logger.debug(f"Getting plugin names for: {plugin_path}")
+                
                 with subprocess.Popen(
                     [sys.executable, "-c", code],
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE if self.verbose else subprocess.DEVNULL,
                     text=True
                 ) as proc:
-                    stdout, _ = proc.communicate(timeout=5)
+                    stdout, stderr = proc.communicate(timeout=5)
                     if stdout:
-                        for plugin_name in stdout.strip().split('\n'):
-                            if plugin_name:
-                                plugin_tasks.append((str(plugin_path), plugin_name, "vst3", None))
+                        names = [n for n in stdout.strip().split('\n') if n]
+                        if self.verbose:
+                            console.print(f"[dim]  • {plugin_path.stem}: {len(names)} plugin(s)[/dim]")
+                            if stderr:
+                                logger.debug(f"stderr for {plugin_path}: {stderr}")
+                        for plugin_name in names:
+                            plugin_tasks.append((str(plugin_path), plugin_name, "vst3", None))
             except Exception as e:
                 # If we can't get plugin names, try with the filename
                 plugin_name = plugin_path.stem
                 plugin_tasks.append((str(plugin_path), plugin_name, "vst3", None))
+                if self.verbose:
+                    console.print(f"[yellow]  • Using filename for {plugin_path}: {e}[/yellow]")
         
         # AU plugins (macOS only)
         if platform.system() == "Darwin":
-            for plugin_path, vendor_name, plugin_name in self._find_aufx_plugins():
+            au_plugins = self._find_aufx_plugins()
+            if self.verbose and au_plugins:
+                console.print(f"[dim]Getting names for {len(au_plugins)} Audio Unit plugins...[/dim]")
+            
+            for plugin_path, vendor_name, plugin_name in au_plugins:
                 try:
                     # Get plugin names without loading the plugin
                     # Use repr to safely pass the path
                     path_str = str(plugin_path)
                     code = f"import pedalboard; names = pedalboard.AudioUnitPlugin.get_plugin_names_for_file({repr(path_str)}); print('\\n'.join(names))"
                     
+                    if self.verbose:
+                        logger.debug(f"Getting AU plugin names for: {plugin_path}")
+                    
                     with subprocess.Popen(
                         [sys.executable, "-c", code],
                         stdout=subprocess.PIPE,
-                        stderr=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE if self.verbose else subprocess.DEVNULL,
                         text=True
                     ) as proc:
-                        stdout, _ = proc.communicate(timeout=5)
+                        stdout, stderr = proc.communicate(timeout=5)
                         if stdout:
-                            for name in stdout.strip().split('\n'):
-                                if name:
-                                    plugin_tasks.append((str(plugin_path), name, "aufx", vendor_name))
+                            names = [n for n in stdout.strip().split('\n') if n]
+                            if self.verbose:
+                                console.print(f"[dim]  • {plugin_name} by {vendor_name}: {len(names)} plugin(s)[/dim]")
+                                if stderr:
+                                    logger.debug(f"stderr for {plugin_path}: {stderr}")
+                            for name in names:
+                                plugin_tasks.append((str(plugin_path), name, "aufx", vendor_name))
                 except Exception as e:
                     # Fallback to plugin name from auval
                     plugin_tasks.append((str(plugin_path), plugin_name, "aufx", vendor_name))
+                    if self.verbose:
+                        console.print(f"[yellow]  • Using auval name for {plugin_name}: {e}[/yellow]")
         
         # Scan in parallel with process isolation
         self.scan_plugins_parallel(plugin_tasks)

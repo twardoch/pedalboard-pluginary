@@ -4427,8 +4427,12 @@ from benedict import benedict as bdict
 from .core import PedalboardPluginary
 from .scanner import PedalboardScanner
 from .scanner_isolated import IsolatedPedalboardScanner
-from .scanner_parallel import ParallelPedalboardScanner
 import logging
+from rich.console import Console
+import sys
+import logging
+from rich.console import Console
+import sys
 from rich.console import Console
 from .scanner_isolated import scan_plugin_isolated
 import pedalboard
@@ -4436,13 +4440,13 @@ from rich.console import Console
 from rich.table import Table
 from .data import get_cache_path, load_json_file
 
-def get_scanner((parallel=False, isolated=False, workers=None)):
+def get_scanner((isolated=False, workers=4, verbose=False)):
     """Factory method to get appropriate scanner instance."""
 
-def scan_plugins((extra_folders=None, parallel=False, isolated=True, workers=None, verbose=False)):
+def scan_plugins((extra_folders=None, workers=4, verbose=False)):
     """Scan all plugins. ..."""
 
-def update_plugins((extra_folders=None, parallel=False, isolated=True, workers=None)):
+def update_plugins((extra_folders=None, workers=4, verbose=False)):
     """Update plugin cache with new plugins only."""
 
 def list_json(()):
@@ -5256,7 +5260,7 @@ from .utils import ensure_folder
 
 class IsolatedPedalboardScanner:
     """Scanner with complete process isolation for each plugin."""
-    def __init__((self, max_workers: Optional[int] = None, timeout: int = 30)):
+    def __init__((self, max_workers: Optional[int] = None, timeout: int = 30, verbose: bool = False)):
     def ensure_ignores((self)):
         """Ensure ignores file exists."""
     def save_plugins((self)):
@@ -5278,10 +5282,10 @@ class IsolatedPedalboardScanner:
     def update((self, extra_folders=None)):
         """Update with only new plugins."""
 
-def scan_plugin_isolated((plugin_path: str, plugin_name: str, plugin_type: str, timeout: int = 30)) -> dict:
+def scan_plugin_isolated((plugin_path: str, plugin_name: str, plugin_type: str, timeout: int = 30, verbose: bool = False)) -> dict:
     """ Scan a single plugin in complete isolation using subprocess...."""
 
-def __init__((self, max_workers: Optional[int] = None, timeout: int = 30)):
+def __init__((self, max_workers: Optional[int] = None, timeout: int = 30, verbose: bool = False)):
 
 def ensure_ignores((self)):
     """Ensure ignores file exists."""
