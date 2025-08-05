@@ -462,6 +462,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Configurable timeout (default 30 seconds) per plugin
   - Graceful handling of plugin crashes, timeouts, and errors
   - Default scanner mode is now isolated for maximum stability
+  - New scanner modules: scanner_isolated.py, scanner_parallel.py, scanner_worker.py, scanner_clean.py
+  - Created modular scanner architecture with BaseScanner class
 
 ### Added (August 2025)
 - **Beautiful Rich Progress Display**: Implemented minimalist Rich table for plugin scanning progress
@@ -1688,6 +1690,13 @@ Pedalboard Pluginary now features both beautiful progress displays and a stable 
 - Timeout protection and failed plugin tracking
 - Beautiful Rich progress bar with statistics
 
+### ✅ Complete Process Isolation Scanner
+- Created scan_single.py standalone CLI tool that loads one plugin and returns JSON
+- Each plugin scanned in completely separate process - crashes don't affect scanner
+- IsolatedPedalboardScanner orchestrates subprocess calls safely
+- New scanner modules: scanner_isolated.py, scanner_parallel.py, scanner_worker.py
+- Created modular scanner architecture with BaseScanner class
+
 ## Current State Analysis
 
 ### ✅ Completed Major Features
@@ -2370,16 +2379,9 @@ _Pedalboard Pluginary_ is not affiliated with [Pedalboard](https://github.com/sp
 ## Immediate Priority: Integration & Stability
 
 ### Scanner Integration
-- [x] Integrate parallel scanner as primary scanning backend
-- [x] Add CLI option to choose between standard and parallel scanner  
-- [x] Migrate existing scanner functionality to use parallel architecture
-- [x] Add configuration for worker process count
 - [ ] Implement retry mechanism for failed plugins
 
 ### Progress Display Enhancement  
-- [x] Beautiful Rich progress display for scanning
-- [x] Vendor/manufacturer extraction for all plugin types
-- [x] Add summary statistics (via info command)
 - [ ] Implement verbose and quiet modes
 - [ ] Add estimated time remaining display
 
@@ -5102,6 +5104,7 @@ import json
 import sys
 import os
 import warnings
+import io
 import pedalboard
 
 def scan_single_plugin((plugin_path: str, plugin_name: str, plugin_type: str)):

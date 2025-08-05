@@ -11,18 +11,11 @@ import json
 import sys
 import os
 import warnings
+import io
 
 # Suppress all warnings and output
 warnings.filterwarnings("ignore")
 os.environ['PYTHONWARNINGS'] = 'ignore'
-
-# Redirect stderr to devnull to suppress plugin output
-stderr = sys.stderr
-try:
-    devnull = open(os.devnull, 'w')
-    sys.stderr = devnull
-except:
-    pass
 
 
 def scan_single_plugin(plugin_path: str, plugin_name: str, plugin_type: str):
@@ -37,10 +30,21 @@ def scan_single_plugin(plugin_path: str, plugin_name: str, plugin_type: str):
         "manufacturer": None
     }
     
+    # Save original stdout and stderr
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    
+    # Create string buffer to capture all output
+    captured_output = io.StringIO()
+    
     try:
+        # Redirect both stdout and stderr to capture all output
+        sys.stdout = captured_output
+        sys.stderr = captured_output
+        
         import pedalboard
         
-        # Load the plugin
+        # Load the plugin (all its output will be captured)
         plugin = pedalboard.load_plugin(plugin_path, plugin_name=plugin_name)
         
         # Extract parameters
@@ -85,15 +89,16 @@ def scan_single_plugin(plugin_path: str, plugin_name: str, plugin_type: str):
     except Exception as e:
         result["error"] = str(e)
     
-    # Output as JSON
-    print(json.dumps(result))
+    finally:
+        # Restore original stdout and stderr
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        
+        # Close the captured output buffer
+        captured_output.close()
     
-    # Restore stderr
-    try:
-        sys.stderr = stderr
-        devnull.close()
-    except:
-        pass
+    # Output ONLY the JSON result
+    print(json.dumps(result))
 
 
 def main():

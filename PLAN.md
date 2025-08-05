@@ -17,6 +17,13 @@ Pedalboard Pluginary now features both beautiful progress displays and a stable 
 - Timeout protection and failed plugin tracking
 - Beautiful Rich progress bar with statistics
 
+### ✅ Complete Process Isolation Scanner
+- Created scan_single.py standalone CLI tool that loads one plugin and returns JSON
+- Each plugin scanned in completely separate process - crashes don't affect scanner
+- IsolatedPedalboardScanner orchestrates subprocess calls safely
+- New scanner modules: scanner_isolated.py, scanner_parallel.py, scanner_worker.py
+- Created modular scanner architecture with BaseScanner class
+
 ## Current State Analysis
 
 ### ✅ Completed Major Features

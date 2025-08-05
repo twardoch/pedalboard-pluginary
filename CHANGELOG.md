@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Configurable timeout (default 30 seconds) per plugin
   - Graceful handling of plugin crashes, timeouts, and errors
   - Default scanner mode is now isolated for maximum stability
+  - New scanner modules: scanner_isolated.py, scanner_parallel.py, scanner_worker.py, scanner_clean.py
+  - Created modular scanner architecture with BaseScanner class
 
 ### Added (August 2025)
 - **Beautiful Rich Progress Display**: Implemented minimalist Rich table for plugin scanning progress
