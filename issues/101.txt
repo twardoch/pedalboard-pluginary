@@ -1,0 +1,1 @@
+Make the progress scanning much more beautiful using a live rich table, without headers, boxes or lines. Just the plugin path, vendor (ensure that we get the vendor out of both AU and VST3 plugins) and whatever else it is we should show. But it should be quite minimalistic. 

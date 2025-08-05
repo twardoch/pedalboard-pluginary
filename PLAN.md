@@ -1,8 +1,21 @@
-# Pedalboard Pluginary - Streamlining Plan
+# Pedalboard Pluginary - Essential Improvements Plan
 
 ## Overview
 
-Based on comprehensive codebase analysis, Pedalboard Pluginary has achieved exceptional architecture with async capabilities, SQLite caching, and type safety. This plan focuses on streamlining the codebase for optimal performance, maintainability, and user experience.
+Pedalboard Pluginary now features both beautiful progress displays and a stable parallel scanning architecture. This plan focuses on integrating these improvements and implementing essential enhancements for production readiness.
+
+## Recent Achievements (August 2025)
+
+### ✅ Beautiful Rich Progress Display
+- Minimalist Rich table showing plugin name, vendor, and progress
+- Real-time updates during scanning
+- Vendor extraction from both AU and VST3 plugins
+
+### ✅ Stable Parallel Scanner
+- Process isolation for crash protection
+- Parallel processing with configurable workers
+- Timeout protection and failed plugin tracking
+- Beautiful Rich progress bar with statistics
 
 ## Current State Analysis
 

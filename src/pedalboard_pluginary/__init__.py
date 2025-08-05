@@ -10,3 +10,5 @@ finally:
     del version, PackageNotFoundError
 
 from .core import PedalboardPluginary
+from .scanner import PedalboardScanner
+from .scanner_isolated import IsolatedPedalboardScanner

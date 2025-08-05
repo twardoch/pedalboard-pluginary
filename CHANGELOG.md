@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (August 2025)
+- **Complete Process Isolation Scanner**: Ultimate stability through subprocess isolation
+  - Created scan_single.py standalone CLI tool that loads one plugin and returns JSON
+  - Each plugin scanned in completely separate process - crashes don't affect scanner
+  - IsolatedPedalboardScanner orchestrates subprocess calls safely
+  - Parallel execution via ThreadPoolExecutor for optimal performance
+  - Configurable timeout (default 30 seconds) per plugin
+  - Graceful handling of plugin crashes, timeouts, and errors
+  - Default scanner mode is now isolated for maximum stability
+
+### Added (August 2025)
+- **Beautiful Rich Progress Display**: Implemented minimalist Rich table for plugin scanning progress
+  - Shows plugin name, vendor/manufacturer, and progress without headers or borders
+  - Real-time updates during scanning with vendor extraction
+  - Extracts vendor information from both AU (via auval) and VST3 (via pedalboard API)
+- **Stable Parallel Scanner Architecture**: New process-isolated parallel scanning system
+  - Created scanner_worker.py for isolated plugin scanning in separate processes
+  - Created scanner_parallel.py with ProcessPoolExecutor for parallel processing
+  - Added timeout protection (30 seconds per plugin) to prevent hanging
+  - Failed plugin tracking with separate file for debugging
+  - Configurable worker processes for optimal performance
+  - Process isolation prevents plugin crashes from affecting scanner
+  - Beautiful Rich progress bar with statistics and error tracking
+- **CLI Enhancements**: Integrated parallel scanner into main CLI
+  - Added --parallel flag to enable parallel scanning mode
+  - Added --workers flag to configure number of worker processes
+  - Added 'info' command to display scanner statistics and cache information
+  - Factory method for seamless scanner backend selection
+- **Clean Output**: Suppressed noisy plugin loading messages
+  - Added output suppression context managers
+  - Cleaned up logging to show only essential information
+  - Beautiful Rich formatting for scan progress and summaries
+  - Reduced logging level to WARNING for cleaner output
+
 ### Added (January 2025)
 - **Git-tag-based Semversioning**: Implemented automatic version detection from git tags using hatch-vcs
 - **Comprehensive Test Suite**: Added extensive unit tests for core modules (models, serialization, exceptions, core)

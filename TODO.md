@@ -1,4 +1,20 @@
-# Pedalboard Pluginary - Streamlining TODO
+# Pedalboard Pluginary - Essential Improvements TODO
+
+## Immediate Priority: Integration & Stability
+
+### Scanner Integration
+- [x] Integrate parallel scanner as primary scanning backend
+- [x] Add CLI option to choose between standard and parallel scanner  
+- [x] Migrate existing scanner functionality to use parallel architecture
+- [x] Add configuration for worker process count
+- [ ] Implement retry mechanism for failed plugins
+
+### Progress Display Enhancement  
+- [x] Beautiful Rich progress display for scanning
+- [x] Vendor/manufacturer extraction for all plugin types
+- [x] Add summary statistics (via info command)
+- [ ] Implement verbose and quiet modes
+- [ ] Add estimated time remaining display
 
 ## Phase 1: Code Organization & Cleanup (Priority: High)
 

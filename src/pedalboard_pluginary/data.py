@@ -2,8 +2,7 @@ import json
 import os
 import shutil
 from pathlib import Path
-
-from pkg_resources import resource_filename
+from importlib import resources
 
 from .utils import *
 
@@ -46,7 +45,9 @@ def save_ignores(ignores, ignores_path):
 
 def copy_default_ignores(destination_path):
     """Copy the default ignores file to the destination if it does not exist."""
-    default_ignores_path = resource_filename(__name__, "resources/default_ignores.json")
     if not destination_path.exists():
         ensure_folder(destination_path)
-        shutil.copy(default_ignores_path, destination_path)
+        # Use importlib.resources to access the default ignores file
+        with resources.open_text('pedalboard_pluginary.resources', 'default_ignores.json') as f:
+            with open(destination_path, 'w') as dest:
+                dest.write(f.read())
