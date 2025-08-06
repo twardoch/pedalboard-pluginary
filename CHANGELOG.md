@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (2025-08-05)
+- **Comprehensive Integration Tests**: Complete test suite for failsafe scanning architecture
+  - Worker process crash simulation tests  
+  - Main process crash and resume verification
+  - Commit phase crash protection tests
+  - Edge case handling (empty journal, all-failed journal)
+  - Concurrent journal access tests
+  - Real subprocess termination tests
+
+### Changed (2025-08-05)  
+- **Major Code Reorganization**: Streamlined and consolidated codebase
+  - Merged ScanJournal class into scanner_isolated.py for better cohesion
+  - Consolidated json_utils.py functions into serialization.py
+  - Removed all deprecated scanner implementations (base_scanner.py, async_scanner.py)
+  - Removed unused scanner modules (vst3_scanner.py, au_scanner.py)
+  - Cleaned up protocols.py by removing unused PluginScanner protocol
+  - Replaced fire with argparse in scan_single.py for consistency
+  - Added `from __future__ import annotations` for Python 3.7+ compatibility
+  - Fixed import issues and circular dependencies
+
+### Fixed (2025-08-05)
+- Fixed missing thread-local storage initialization in ScanJournal class
+- Fixed import errors in __init__.py after scanner refactoring
+
+### Added (August 2025)
+- **Failsafe Scanning Architecture**: Implemented a transactional and resumable scanning architecture.
+  - Created `journal.py` with a `ScanJournal` class for robustly storing scan progress.
+  - The individual plugin scanner (`scan_single.py`) is now journal-aware, persisting its own results.
+  - The main scanner orchestrator (`scanner_isolated.py`) is now fully resumable, and atomically commits results.
+  - The CLI has been migrated to `click` and simplified to use the new, robust scanning mechanism.
+
 ### Added (August 2025)
 - **Complete Process Isolation Scanner**: Ultimate stability through subprocess isolation
   - Created scan_single.py standalone CLI tool that loads one plugin and returns JSON

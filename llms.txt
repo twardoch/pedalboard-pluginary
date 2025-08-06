@@ -3,7 +3,8 @@ Project Structure:
 ├── 📁 issues
 │   ├── 📄 101.txt
 │   ├── 📄 102.txt
-│   └── 📄 103.txt
+│   ├── 📄 103.txt
+│   └── 📄 104.txt
 ├── 📁 scripts
 │   ├── 📄 format.sh
 │   ├── 📄 release.sh
@@ -20,14 +21,8 @@ Project Structure:
 │   │   │   └── 📄 sqlite_backend.py
 │   │   ├── 📁 resources
 │   │   │   └── 📄 default_ignores.json
-│   │   ├── 📁 scanners
-│   │   │   ├── 📄 __init__.py
-│   │   │   ├── 📄 au_scanner.py
-│   │   │   └── 📄 vst3_scanner.py
 │   │   ├── 📄 __init__.py
 │   │   ├── 📄 __main__.py
-│   │   ├── 📄 async_scanner.py
-│   │   ├── 📄 base_scanner.py
 │   │   ├── 📄 constants.py
 │   │   ├── 📄 core.py
 │   │   ├── 📄 data.py
@@ -38,11 +33,8 @@ Project Structure:
 │   │   ├── 📄 py.typed
 │   │   ├── 📄 retry.py
 │   │   ├── 📄 scan_single.py
-│   │   ├── 📄 scanner.py
 │   │   ├── 📄 scanner_clean.py
 │   │   ├── 📄 scanner_isolated.py
-│   │   ├── 📄 scanner_parallel.py
-│   │   ├── 📄 scanner_worker.py
 │   │   ├── 📄 serialization.py
 │   │   ├── 📄 timeout.py
 │   │   ├── 📄 types.py
@@ -54,10 +46,11 @@ Project Structure:
 │   │   ├── 📄 __init__.py
 │   │   ├── 📄 test_au_scanner.py
 │   │   └── 📄 test_vst3_scanner.py
-│   ├── 📄 test_cli.py
 │   ├── 📄 test_core.py
 │   ├── 📄 test_data.py
 │   ├── 📄 test_exceptions.py
+│   ├── 📄 test_failsafe_integration.py
+│   ├── 📄 test_journal.py
 │   ├── 📄 test_models.py
 │   ├── 📄 test_serialization.py
 │   ├── 📄 test_sqlite_performance.py
@@ -452,6 +445,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Added (2025-08-05)
+- **Comprehensive Integration Tests**: Complete test suite for failsafe scanning architecture
+  - Worker process crash simulation tests  
+  - Main process crash and resume verification
+  - Commit phase crash protection tests
+  - Edge case handling (empty journal, all-failed journal)
+  - Concurrent journal access tests
+  - Real subprocess termination tests
+
+### Changed (2025-08-05)  
+- **Major Code Reorganization**: Streamlined and consolidated codebase
+  - Merged ScanJournal class into scanner_isolated.py for better cohesion
+  - Consolidated json_utils.py functions into serialization.py
+  - Removed all deprecated scanner implementations (base_scanner.py, async_scanner.py)
+  - Removed unused scanner modules (vst3_scanner.py, au_scanner.py)
+  - Cleaned up protocols.py by removing unused PluginScanner protocol
+  - Replaced fire with argparse in scan_single.py for consistency
+  - Added `from __future__ import annotations` for Python 3.7+ compatibility
+  - Fixed import issues and circular dependencies
+
+### Fixed (2025-08-05)
+- Fixed missing thread-local storage initialization in ScanJournal class
+- Fixed import errors in __init__.py after scanner refactoring
+
+### Added (August 2025)
+- **Failsafe Scanning Architecture**: Implemented a transactional and resumable scanning architecture.
+  - Created `journal.py` with a `ScanJournal` class for robustly storing scan progress.
+  - The individual plugin scanner (`scan_single.py`) is now journal-aware, persisting its own results.
+  - The main scanner orchestrator (`scanner_isolated.py`) is now fully resumable, and atomically commits results.
+  - The CLI has been migrated to `click` and simplified to use the new, robust scanning mechanism.
 
 ### Added (August 2025)
 - **Complete Process Isolation Scanner**: Ultimate stability through subprocess isolation
@@ -1675,223 +1699,48 @@ Your project now has a complete, production-ready CI/CD pipeline with git-tag-ba
 
 ## Overview
 
-Pedalboard Pluginary now features both beautiful progress displays and a stable parallel scanning architecture. This plan focuses on integrating these improvements and implementing essential enhancements for production readiness.
+The failsafe scanning architecture has been fully implemented and tested, providing a robust and resumable scanning process. The codebase has been significantly cleaned up and streamlined, with all deprecated code removed and modules properly consolidated.
 
-## Recent Achievements (August 2025)
+## Phase 1: Solidify Failsafe Scanning Architecture ✅ COMPLETED (2025-08-05)
 
-### ✅ Beautiful Rich Progress Display
-- Minimalist Rich table showing plugin name, vendor, and progress
-- Real-time updates during scanning
-- Vendor extraction from both AU and VST3 plugins
-
-### ✅ Stable Parallel Scanner
-- Process isolation for crash protection
-- Parallel processing with configurable workers
-- Timeout protection and failed plugin tracking
-- Beautiful Rich progress bar with statistics
-
-### ✅ Complete Process Isolation Scanner
-- Created scan_single.py standalone CLI tool that loads one plugin and returns JSON
-- Each plugin scanned in completely separate process - crashes don't affect scanner
-- IsolatedPedalboardScanner orchestrates subprocess calls safely
-- New scanner modules: scanner_isolated.py, scanner_parallel.py, scanner_worker.py
-- Created modular scanner architecture with BaseScanner class
-
-## Current State Analysis
-
-### ✅ Completed Major Features
-- **Async Architecture**: Full async scanner implementation with concurrency control
-- **SQLite Cache Backend**: High-performance SQLite cache with FTS and indexing  
-- **Type Safety**: Zero mypy errors across entire codebase
-- **Modular Design**: Clean separation with protocols and base classes
-- **Error Handling**: Comprehensive exception hierarchy and timeout protection
-- **Progress Reporting**: Multiple reporter implementations with rich feedback
-
-### 🎯 Areas for Streamlining
-
-## Phase 1: Code Organization & Cleanup (Priority: High)
-
-### 1.1 Module Consolidation
-**Current Issue**: Some functionality is spread across too many small modules
-
+### 1.1. Comprehensive Integration Testing
+**Goal**: Ensure the new journaling and resumable scanning architecture is flawless under various failure conditions.
 **Actions**:
-- Consolidate scanner classes into fewer, more focused modules
-- Merge utility functions scattered across multiple files
-- Reduce import complexity and circular dependencies
-- Simplify protocol definitions where appropriate
+- **Simulate Worker Crashes**: Write an integration test where the `scan_single.py` process is abruptly terminated (e.g., using `os.kill`). Verify that the main scanner correctly marks the plugin as `failed` or `timeout` in the journal and that the scan can be resumed.
+- **Simulate Main Process Crash**: Write a test that kills the main `IsolatedPedalboardScanner` process mid-scan. On re-running the scan, verify that it correctly resumes from the journal and only processes pending plugins.
+- **Test Atomic Commit**: Write a test to simulate a crash *during* the commit phase (after the journal is read but before the main cache is written). Verify that the main cache remains untouched and the journal is preserved, allowing the commit to be re-attempted on the next run.
+- **Test Edge Cases**: Test with an empty journal, a journal with only failed plugins, and a journal from a fully completed but uncommitted scan.
 
-### 1.2 Remove Deprecated Code
+## Phase 2: Code Organization & Cleanup ✅ COMPLETED (2025-08-05)
+
+### 2.1. Module Consolidation
+**Goal**: Reduce complexity and improve maintainability by merging related modules.
 **Actions**:
-- Remove unused imports and dead code paths
-- Clean up legacy Fire-based CLI remnants
-- Remove experimental features that aren't production-ready
-- Eliminate redundant type definitions
+- **Merge `scanner_isolated.py` and `journal.py`**: The `ScanJournal` is tightly coupled to the `IsolatedPedalboardScanner`. Merge the `ScanJournal` class into the `scanner_isolated.py` module to create a single, self-contained, and cohesive scanning unit.
+- **Consolidate Cache Backends**: The `cache` sub-package can be simplified. The `SQLiteCacheBackend` is now the primary backend. The `json_backend.py` and `migration.py` can be deprecated or moved to a `legacy` sub-folder if backward compatibility is desired, otherwise removed.
+- **Merge `json_utils.py` into `serialization.py`**: The `json_utils.py` was a temporary fix for a circular import. Now that the code is being reorganized, these functions can be moved back into `serialization.py`.
 
-### 1.3 Optimize Imports
+### 2.2. Remove Deprecated Code
+**Goal**: Eliminate all obsolete code to create a clean and modern codebase.
 **Actions**:
-- Use `from __future__ import annotations` consistently
-- Minimize runtime imports using TYPE_CHECKING blocks
-- Group and organize imports systematically
-- Remove unused dependencies
+- **Remove `BaseScanner` and `AsyncScanner`**: The `IsolatedPedalboardScanner` is now the sole scanning implementation. The `base_scanner.py` and `async_scanner.py` modules, along with the `BaseScanner` class and `AsyncScannerMixin`, are no longer needed.
+- **Remove Old Protocols**: The `protocols.py` file may contain protocols that are no longer relevant with the simplified architecture. Review and remove any that are not in use.
+- **Clean up `__main__.py`**: The CLI is now based on `click`. Remove any remnants of the old `fire`-based CLI.
 
-## Phase 2: Performance Optimizations (Priority: High)
-
-### 2.1 SQLite Cache Optimizations
-**Current**: SQLite backend is implemented but may need tuning
-
+### 2.3. Optimize Imports and Structure
+**Goal**: Ensure a clean and consistent import structure across the project.
 **Actions**:
-- Optimize database schema and indexes
-- Add connection pooling for concurrent access
-- Implement prepared statements for frequent queries
-- Add SQLite pragmas for performance tuning
-- Implement cache warming strategies
-
-### 2.2 Async Processing Improvements
-**Actions**:
-- Fine-tune concurrency limits based on system resources
-- Implement adaptive concurrency based on system load
-- Add memory-efficient streaming for large plugin sets
-- Optimize task scheduling and batching
-
-### 2.3 Memory Management
-**Actions**:
-- Implement lazy loading patterns throughout
-- Add memory profiling and optimization
-- Use __slots__ for frequently instantiated classes
-- Optimize data structures for memory efficiency
-
-## Phase 3: CLI & User Experience (Priority: Medium)
-
-### 3.1 Modern CLI Framework Migration
-**Current**: Using Fire framework, need modern alternative
-
-**Actions**:
-- Migrate from Fire to Click for better structure
-- Add Rich for beautiful terminal output
-- Implement comprehensive help system
-- Add command validation and error handling
-- Create intuitive command structure
-
-### 3.2 Search & Filtering Enhancement
-**Actions**:
-- Implement fuzzy search capabilities
-- Add advanced filtering options
-- Create search result ranking system
-- Add export/import functionality
-- Implement plugin recommendation system
-
-## Phase 4: Developer Experience (Priority: Medium)
-
-### 4.1 Testing Infrastructure
-**Actions**:
-- Add comprehensive integration tests
-- Implement performance regression tests
-- Add async testing utilities
-- Create test fixtures for various plugin types
-- Add property-based testing
-
-### 4.2 Documentation & Tooling
-**Actions**:
-- Streamline build system (build.sh optimization)
-- Update documentation to reflect current architecture
-- Add development setup automation
-- Create contributor guidelines
-- Add automated code quality checks
-
-### 4.3 Configuration Management
-**Actions**:
-- Add configuration file support
-- Implement environment variable configuration
-- Add configuration validation
-- Create configuration migration utilities
-- Add per-project configuration support
-
-## Phase 5: Production Readiness (Priority: Low)
-
-### 5.1 Monitoring & Observability
-**Actions**:
-- Add structured logging throughout
-- Implement performance metrics collection
-- Add health check endpoints/commands
-- Create diagnostic utilities
-- Add cache health monitoring
-
-### 5.2 Error Recovery & Resilience
-**Actions**:
-- Enhance error recovery mechanisms
-- Add circuit breaker patterns for plugin loading
-- Implement graceful degradation
-- Add cache repair utilities
-- Create backup and restore functionality
-
-## Implementation Strategy
-
-### Quick Wins (Week 1)
-1. **Code Cleanup**: Remove dead code, optimize imports
-2. **SQLite Tuning**: Add performance pragmas and optimize queries
-3. **Memory Optimization**: Add __slots__ to key classes
-4. **Documentation**: Update README and inline docs
-
-### Medium Impact (Week 2-3)
-1. **CLI Migration**: Move to Click + Rich framework
-2. **Search Enhancement**: Add fuzzy search and advanced filtering
-3. **Testing**: Add integration and performance tests
-4. **Configuration**: Add config file support
-
-### Long-term Improvements (Week 4+)
-1. **Advanced Features**: Plugin recommendations, categorization
-2. **Monitoring**: Add observability and health checks
-3. **Integration**: DAW integration helpers
-4. **Platform Support**: Windows/Linux optimization
-
-## Success Metrics
-
-### Performance Targets
-- **Scan Speed**: Maintain 10-20 plugins/second with async
-- **Memory Usage**: Keep baseline under 50MB for large datasets
-- **Search Performance**: Sub-100ms for most queries
-- **Startup Time**: Under 2 seconds for CLI commands
-
-### Quality Targets  
-- **Type Safety**: Maintain zero mypy errors
-- **Test Coverage**: Achieve >90% code coverage
-- **Documentation**: All public APIs documented
-- **Error Handling**: Graceful failure for all error conditions
-
-### User Experience Targets
-- **CLI Responsiveness**: All commands respond within 5 seconds
-- **Error Messages**: Clear, actionable error messages
-- **Help System**: Comprehensive help for all commands
-- **Output Quality**: Rich, formatted output for all commands
-
-## Risk Mitigation
-
-### Backward Compatibility
-- Maintain JSON cache support during SQLite migration
-- Provide migration utilities for existing users
-- Keep current CLI interface until new one is stable
-- Version configuration files appropriately
-
-### Performance Regression
-- Add performance benchmarks to CI
-- Monitor memory usage during development
-- Test with large plugin collections (1000+ plugins)
-- Profile critical code paths regularly
-
-### Platform Compatibility
-- Test on multiple Python versions (3.9-3.12)
-- Verify SQLite compatibility across platforms
-- Test async behavior on different OS schedulers
-- Validate file system operations across platforms
+- **Standardize Imports**: Use a consistent import order (standard library, third-party, first-party) across all modules.
+- **Use `__future__.annotations`**: Ensure all files have `from __future__ import annotations`.
+- **Refactor `data.py`**: This module contains a mix of functions. Refactor it to be more focused on data path management.
 
 ## Next Steps
 
-1. **Immediate**: Begin Phase 1 code cleanup and organization
-2. **Week 1**: Complete SQLite optimizations and memory improvements
-3. **Week 2**: Start CLI migration to Click + Rich
-4. **Week 3**: Add comprehensive testing infrastructure
-5. **Week 4**: Implement advanced search and filtering
-6. **Ongoing**: Monitor performance and user feedback
+1.  **Immediate**: Begin Phase 1: Comprehensive Integration Testing.
+2.  **Week 1**: Complete all integration tests for the failsafe scanning architecture.
+3.  **Week 2**: Begin Phase 2: Code Organization & Cleanup.
+4.  **Week 3**: Complete the module consolidation and remove all deprecated code.
+5.  **Week 4**: Finalize the import optimization and refactor the `data.py` module.
 </document_content>
 </document>
 
@@ -1993,99 +1842,192 @@ Requires Python 3.9 or newer.
 
 ## Command-Line Usage
 
-Pedalboard Pluginary provides a powerful and user-friendly command-line interface (`pbpluginary`).
+Pedalboard Pluginary provides a powerful and user-friendly command-line interface that can be invoked using either `pbpluginary` or `python -m pedalboard_pluginary`.
 
-*(Note: The CLI is being actively developed. The commands below reflect the intended modern interface based on Click and Rich, as outlined in the project's development plan. Some commands/options might differ slightly if you're on an older version.)*
+The CLI offers comprehensive plugin management capabilities with multiple output formats and filtering options. All commands support `--help` for detailed usage information.
 
-Here are some common commands:
+### Available Commands
 
-### Scan for Plugins
+#### 1. Scan for Plugins
 
-*   **Scan all plugins (default: async, SQLite cache):**
-    ```bash
-    pbpluginary scan
-    ```
-*   **Force a full rescan, ignoring existing cache:**
-    ```bash
-    pbpluginary scan --force
-    ```
-*   **Scan synchronously:**
-    ```bash
-    pbpluginary scan --sync
-    ```
-*   **Scan additional custom folders:**
-    ```bash
-    pbpluginary scan --folders "/path/to/my/vst3s,/another/path/to/plugins"
-    ```
-*   **Adjust concurrency for async scanning:**
-    ```bash
-    pbpluginary scan --concurrency 20
-    ```
+The `scan` command discovers and catalogs audio plugins on your system:
 
-### List and Search Plugins
-
-*   **List all discovered plugins (default: table format):**
-    ```bash
-    pbpluginary list
-    ```
-*   **List plugins in JSON format:**
-    ```bash
-    pbpluginary list --format json
-    ```
-*   **Filter plugins by name or manufacturer (full-text search):**
-    ```bash
-    pbpluginary list --filter "Reverb"
-    ```
-*   **Filter by plugin type (VST3 or AU):**
-    ```bash
-    pbpluginary list --type vst3
-    ```
-*   **Filter by manufacturer:**
-    ```bash
-    pbpluginary list --manufacturer "FabFilter"
-    ```
-*   **Advanced search (combines with list filters or uses dedicated `search`):**
-    ```bash
-    pbpluginary search "Equalizer" --type au
-    pbpluginary search "Pro-Q" --fuzzy # Fuzzy search for approximate matches
-    ```
-
-### Get Plugin Information
-
-*   **Show detailed information for a specific plugin by its ID:**
-    ```bash
-    pbpluginary info "vst3/FabFilter Pro-Q 3"
-    ```
-    *(Plugin IDs are typically `type/filename_stem`, e.g., `vst3/MassiveX` or `aufx/ChannelEQ`)*
-*   **Test if a plugin can be loaded:**
-    ```bash
-    pbpluginary info "vst3/Serum" --test
-    ```
-
-### Manage Cache
-
-*   **View cache statistics:**
-    ```bash
-    pbpluginary cache stats
-    ```
-*   **Clear the plugin cache:**
-    ```bash
-    pbpluginary cache clear
-    ```
-*   **Attempt to repair a corrupted cache:**
-    ```bash
-    pbpluginary cache repair
-    ```
-*   **Migrate cache format (e.g., from a legacy JSON cache to SQLite):**
-    ```bash
-    pbpluginary cache migrate --to sqlite
-    ```
-
-For a full list of commands and options, use:
 ```bash
-pbpluginary --help
-pbpluginary <command> --help
+# Basic scan (uses cache if available, scans if needed)
+pbpluginary scan
+
+# Force a complete rescan, clearing existing cache
+pbpluginary scan --rescan
+
+# Scan additional folders beyond standard locations
+pbpluginary scan --extra-folders /path/to/custom/plugins
+
+# Adjust parallel processing (default: 8 workers)
+pbpluginary scan --workers 4
+
+# Set timeout per plugin in seconds (default: 30)
+pbpluginary scan --timeout 60
+
+# Combine options for comprehensive scanning
+pbpluginary scan --rescan --extra-folders /my/vst3 --workers 16
 ```
+
+**Scanning Features:**
+- **Process Isolation**: Each plugin is scanned in a separate process for maximum stability
+- **Resumable Scans**: If scanning is interrupted, it automatically resumes from where it left off
+- **Parallel Processing**: Utilizes multiple CPU cores for faster scanning
+- **Timeout Protection**: Plugins that hang are automatically skipped after the timeout period
+- **Progress Display**: Beautiful Rich progress bars show real-time scanning status
+
+#### 2. List and Filter Plugins
+
+The `list` command displays your plugin catalog with powerful filtering options:
+
+```bash
+# List all plugins in table format (default)
+pbpluginary list
+
+# Output in different formats
+pbpluginary list --format json      # JSON output
+pbpluginary list --format yaml      # YAML output (requires PyYAML)
+pbpluginary list --format table     # Table output (default)
+
+# Filter by plugin name (case-insensitive)
+pbpluginary list --name "reverb"
+
+# Filter by manufacturer/vendor
+pbpluginary list --vendor "Native Instruments"
+
+# Filter by plugin type
+pbpluginary list --type vst3         # VST3 plugins only
+pbpluginary list --type aufx         # Audio Unit plugins only
+
+# Combine filters
+pbpluginary list --vendor "FabFilter" --type vst3 --format json
+
+# Export filtered results to file using shell redirection
+pbpluginary list --vendor "Waves" --format json > waves_plugins.json
+```
+
+#### 3. Export Plugins (JSON/YAML)
+
+Dedicated export commands for quick full catalog exports:
+
+```bash
+# Export all plugins as JSON
+pbpluginary json                    # Output to stdout
+pbpluginary json --output plugins.json      # Save to file
+pbpluginary json --pretty           # Pretty-printed JSON
+
+# Export all plugins as YAML
+pbpluginary yaml                    # Output to stdout
+pbpluginary yaml --output plugins.yaml      # Save to file
+
+# Note: YAML export requires PyYAML installation:
+# pip install pyyaml
+```
+
+**Export Formats Include:**
+- Plugin name and ID
+- Plugin type (VST3/AU)
+- File path
+- Manufacturer/vendor
+- Parameters and their default values
+- Additional metadata
+
+#### 4. View Scanner Information
+
+The `info` command provides detailed statistics about your plugin collection:
+
+```bash
+pbpluginary info
+```
+
+**Displays:**
+- Total number of cached plugins
+- Breakdown by plugin type (VST3, AU)
+- Top manufacturers/vendors
+- Cache file locations and sizes
+- Detection of interrupted scans (active journal)
+
+Example output:
+```
+Plugin Scanner Statistics
+Total plugins cached: 237
+
+Plugins by type:
+  aufx: 89
+  vst3: 148
+
+Top vendors:
+  Native Instruments: 42
+  FabFilter: 15
+  Waves: 38
+  ...
+
+Cache locations:
+  Main cache: ~/Library/Caches/com.twardoch.pedalboard-pluginary/plugins.db
+  Cache size: 2.34 MB
+```
+
+#### 5. Cache Management
+
+The `clear` command manages the plugin cache:
+
+```bash
+# Clear the entire plugin cache (with confirmation prompt)
+pbpluginary clear
+
+# After clearing, run scan to rebuild cache
+pbpluginary scan
+```
+
+### Global Options
+
+All commands support these global options:
+
+```bash
+# Enable verbose logging for debugging
+pbpluginary --verbose scan
+
+# Show help for the main command
+pbpluginary --help
+
+# Show help for specific commands
+pbpluginary scan --help
+pbpluginary list --help
+```
+
+### Quick Start Examples
+
+```bash
+# First-time setup: scan all plugins
+pbpluginary scan
+
+# View summary of discovered plugins
+pbpluginary info
+
+# List all Native Instruments VST3 plugins
+pbpluginary list --vendor "Native Instruments" --type vst3
+
+# Export all plugins to JSON for backup
+pbpluginary json --output my_plugins_backup.json --pretty
+
+# Clear cache and rescan everything
+pbpluginary clear
+pbpluginary scan --rescan
+```
+
+### Platform-Specific Notes
+
+- **macOS**: Scans both VST3 (from `/Library/Audio/Plug-Ins/VST3` and `~/Library/Audio/Plug-Ins/VST3`) and Audio Units
+- **Windows**: Scans VST3 plugins from `C:\Program Files\Common Files\VST3`
+- **Linux**: Scans VST3 plugins from `~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`
+
+Cache files are stored in platform-specific locations:
+- **macOS**: `~/Library/Caches/com.twardoch.pedalboard-pluginary/`
+- **Linux**: `~/.cache/com.twardoch.pedalboard-pluginary/`
+- **Windows**: `%LOCALAPPDATA%\com.twardoch.pedalboard-pluginary\Cache\`
 
 ## Python Library Usage
 
@@ -2376,116 +2318,37 @@ _Pedalboard Pluginary_ is not affiliated with [Pedalboard](https://github.com/sp
 <document_content>
 # Pedalboard Pluginary - Essential Improvements TODO
 
-## Immediate Priority: Integration & Stability
+## ✅ Phase 1: Solidify Failsafe Scanning Architecture - COMPLETED (2025-08-05)
 
-### Scanner Integration
-- [ ] Implement retry mechanism for failed plugins
+### Comprehensive Integration Testing
+- [x] Write integration test to simulate a worker process crash.
+- [x] Write integration test to simulate a main process crash and verify resume.
+- [x] Write integration test to simulate a crash during the commit phase.
+- [x] Write integration tests for edge cases (empty journal, all-failed journal).
 
-### Progress Display Enhancement  
-- [ ] Implement verbose and quiet modes
-- [ ] Add estimated time remaining display
-
-## Phase 1: Code Organization & Cleanup (Priority: High)
+## ✅ Phase 2: Code Organization & Cleanup - COMPLETED (2025-08-05)
 
 ### Module Consolidation
-- [ ] Consolidate scanner classes into fewer, more focused modules
-- [ ] Merge utility functions scattered across multiple files
-- [ ] Reduce import complexity and circular dependencies
-- [ ] Simplify protocol definitions where appropriate
+- [x] Merge the `ScanJournal` class into the `scanner_isolated.py` module.
+- [x] Merge the contents of `json_utils.py` into `serialization.py` and remove `json_utils.py`.
 
 ### Remove Deprecated Code
-- [ ] Remove unused imports and dead code paths
-- [ ] Clean up legacy Fire-based CLI remnants  
-- [ ] Remove experimental features that aren't production-ready
-- [ ] Eliminate redundant type definitions
+- [x] Remove `base_scanner.py` and `async_scanner.py`.
+- [x] Review and remove any unused protocols in `protocols.py`.
+- [x] Remove any remaining `fire`-based CLI code from `__main__.py`.
 
-### Optimize Imports
-- [ ] Use `from __future__ import annotations` consistently
-- [ ] Minimize runtime imports using TYPE_CHECKING blocks
-- [ ] Group and organize imports systematically
-- [ ] Remove unused dependencies
+### Optimize Imports and Structure
+- [x] Standardize import order across all modules.
+- [x] Ensure all files have `from __future__ import annotations`.
 
-## Phase 2: Performance Optimizations (Priority: High)
+## Next Steps
 
-### SQLite Cache Optimizations
-- [ ] Optimize database schema and indexes
-- [ ] Add connection pooling for concurrent access
-- [ ] Implement prepared statements for frequent queries
-- [ ] Add SQLite pragmas for performance tuning
-- [ ] Implement cache warming strategies
+- [ ] Full integration testing with real plugins
+- [ ] Performance benchmarking
+- [ ] Documentation updates
+- [ ] Refactor `data.py` to focus on data path management
+- [ ] Consider deprecating or removing `json_backend.py` and `migration.py` modules
 
-### Async Processing Improvements
-- [ ] Fine-tune concurrency limits based on system resources
-- [ ] Implement adaptive concurrency based on system load
-- [ ] Add memory-efficient streaming for large plugin sets
-- [ ] Optimize task scheduling and batching
-
-### Memory Management
-- [ ] Implement lazy loading patterns throughout
-- [ ] Add memory profiling and optimization
-- [ ] Use __slots__ for frequently instantiated classes
-- [ ] Optimize data structures for memory efficiency
-
-## Phase 3: CLI & User Experience (Priority: Medium)
-
-### Modern CLI Framework Migration
-- [ ] Migrate from Fire to Click for better structure
-- [ ] Add Rich for beautiful terminal output
-- [ ] Implement comprehensive help system
-- [ ] Add command validation and error handling
-- [ ] Create intuitive command structure
-
-### Search & Filtering Enhancement
-- [ ] Implement fuzzy search capabilities
-- [ ] Add advanced filtering options
-- [ ] Create search result ranking system
-- [ ] Add export/import functionality
-- [ ] Implement plugin recommendation system
-
-## Phase 4: Developer Experience (Priority: Medium)
-
-### Testing Infrastructure
-- [ ] Add comprehensive integration tests
-- [ ] Implement performance regression tests
-- [ ] Add async testing utilities
-- [ ] Create test fixtures for various plugin types
-- [ ] Add property-based testing
-
-### Documentation & Tooling
-- [ ] Streamline build system (build.sh optimization)
-- [ ] Update documentation to reflect current architecture
-- [ ] Add development setup automation
-- [ ] Create contributor guidelines
-- [ ] Add automated code quality checks
-
-### Configuration Management
-- [ ] Add configuration file support
-- [ ] Implement environment variable configuration
-- [ ] Add configuration validation
-- [ ] Create configuration migration utilities
-- [ ] Add per-project configuration support
-
-## Phase 5: Production Readiness (Priority: Low)
-
-### Monitoring & Observability
-- [ ] Add structured logging throughout
-- [ ] Implement performance metrics collection
-- [ ] Add health check endpoints/commands
-- [ ] Create diagnostic utilities
-- [ ] Add cache health monitoring
-
-### Error Recovery & Resilience
-- [ ] Enhance error recovery mechanisms
-- [ ] Add circuit breaker patterns for plugin loading
-- [ ] Implement graceful degradation
-- [ ] Add cache repair utilities
-- [ ] Create backup and restore functionality
-
-## Quick Wins (Week 1)
-- [ ] Code Cleanup: Remove dead code, optimize imports
-- [ ] SQLite Tuning: Add performance pragmas and optimize queries
-- [ ] Memory Optimization: Add __slots__ to key classes
-- [ ] Documentation: Update README and inline docs
 </document_content>
 </document>
 
@@ -3894,6 +3757,40 @@ Abort trap: 6              python -m pedalboard_pluginary scan --force
 </document>
 
 <document index="21">
+<source>issues/104.txt</source>
+<document_content>
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/__main__.py", line 221, in <module>
+    cli()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/click/core.py", line 1442, in __call__
+    return self.main(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/click/core.py", line 1363, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/click/core.py", line 1830, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/click/core.py", line 1226, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/click/core.py", line 794, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/__main__.py", line 182, in json
+    pluginary = PedalboardPluginary()
+                ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/core.py", line 14, in __init__
+    self.cache = SQLiteCacheBackend()
+                 ^^^^^^^^^^^^^^^^^^^^
+TypeError: SQLiteCacheBackend.__init__() missing 1 required positional argument: 'db_path'
+
+</document_content>
+</document>
+
+<document index="22">
 <source>publish.sh</source>
 <document_content>
 #!/usr/bin/env bash
@@ -3912,7 +3809,7 @@ uvx hatch publish
 </document_content>
 </document>
 
-<document index="22">
+<document index="23">
 <source>pyproject.toml</source>
 <document_content>
 [build-system]
@@ -4041,7 +3938,7 @@ include = [
 </document_content>
 </document>
 
-<document index="23">
+<document index="24">
 <source>scripts/format.sh</source>
 <document_content>
 #!/usr/bin/env bash
@@ -4096,7 +3993,7 @@ fi
 </document_content>
 </document>
 
-<document index="24">
+<document index="25">
 <source>scripts/release.sh</source>
 <document_content>
 #!/usr/bin/env bash
@@ -4225,7 +4122,7 @@ fi
 </document_content>
 </document>
 
-<document index="25">
+<document index="26">
 <source>scripts/test.sh</source>
 <document_content>
 #!/usr/bin/env bash
@@ -4361,7 +4258,7 @@ fi
 </document_content>
 </document>
 
-<document index="26">
+<document index="27">
 <source>src/pedalboard-stubs/__init__.pyi</source>
 <document_content>
 """Type stubs for pedalboard library."""
@@ -4414,165 +4311,45 @@ __all__ = [
 
 from importlib.metadata import PackageNotFoundError, version
 from .core import PedalboardPluginary
-from .scanner import PedalboardScanner
 from .scanner_isolated import IsolatedPedalboardScanner
 
 
 # File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/__main__.py
 # Language: python
 
-import os
-import fire
-from benedict import benedict as bdict
-from .core import PedalboardPluginary
-from .scanner import PedalboardScanner
-from .scanner_isolated import IsolatedPedalboardScanner
 import logging
-from rich.console import Console
-import sys
-import logging
-from rich.console import Console
-import sys
-from rich.console import Console
-from .scanner_isolated import scan_plugin_isolated
-import pedalboard
+import click
 from rich.console import Console
 from rich.table import Table
-from .data import get_cache_path, load_json_file
+from .core import PedalboardPluginary
+import json
+import json
+import yaml
+from pathlib import Path
+from .data import get_cache_path
+import json as json_module
+import yaml as yaml_module
 
-def get_scanner((isolated=False, workers=4, verbose=False)):
-    """Factory method to get appropriate scanner instance."""
+def cli((verbose: bool)):
+    """A CLI for scanning and managing audio plugins."""
 
-def scan_plugins((extra_folders=None, workers=4, verbose=False)):
-    """Scan all plugins. ..."""
+def scan((rescan: bool, extra_folders: tuple[str], workers: int | None, timeout: int)):
+    """Scan for audio plugins."""
 
-def update_plugins((extra_folders=None, workers=4, verbose=False)):
-    """Update plugin cache with new plugins only."""
-
-def list_json(()):
-
-def list_yaml(()):
-
-def scan_one((plugin_path)):
-    """Scan a single plugin for testing."""
+def list_plugins((name: str | None, vendor: str | None, plugin_type: str | None, output_format: str)):
+    """List scanned plugins."""
 
 def info(()):
-    """Show plugin scanner information and statistics."""
+    """Display scanner statistics and cache information."""
 
-def main(()):
+def clear(()):
+    """Clear the plugin cache."""
 
+def json((output: str | None, pretty: bool)):
+    """Export all plugins as JSON."""
 
-# File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/async_scanner.py
-# Language: python
-
-import asyncio
-import logging
-from pathlib import Path
-from typing import AsyncIterator, List, Optional, TYPE_CHECKING
-from .constants import PLUGIN_LOAD_TIMEOUT
-from .models import PluginInfo
-from .protocols import ProgressReporter
-from .protocols import PluginScanner
-
-class AsyncScannerMixin:
-    """Mixin to add async capabilities to scanners."""
-    def scan_plugin_async((self, path: Path)) -> Optional[PluginInfo]:
-        """Async wrapper for plugin scanning with timeout."""
-    def scan_plugins_batch((
-        self, 
-        paths: List[Path], 
-        max_concurrent: int = 10,
-        progress_reporter: Optional[ProgressReporter] = None
-    )) -> AsyncIterator[PluginInfo]:
-        """Scan multiple plugins concurrently with backpressure control."""
-    def scan_directory_async((
-        self, 
-        directory: Path,
-        max_concurrent: int = 10,
-        progress_reporter: Optional[ProgressReporter] = None
-    )) -> List[PluginInfo]:
-        """Async scan of an entire directory."""
-
-def scan_plugin_async((self, path: Path)) -> Optional[PluginInfo]:
-    """Async wrapper for plugin scanning with timeout."""
-
-def scan_plugins_batch((
-        self, 
-        paths: List[Path], 
-        max_concurrent: int = 10,
-        progress_reporter: Optional[ProgressReporter] = None
-    )) -> AsyncIterator[PluginInfo]:
-    """Scan multiple plugins concurrently with backpressure control."""
-
-def scan_with_semaphore((path: Path)) -> Optional[PluginInfo]:
-
-def scan_directory_async((
-        self, 
-        directory: Path,
-        max_concurrent: int = 10,
-        progress_reporter: Optional[ProgressReporter] = None
-    )) -> List[PluginInfo]:
-    """Async scan of an entire directory."""
-
-
-# File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/base_scanner.py
-# Language: python
-
-import logging
-import re
-from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import List, Optional
-from .models import PluginInfo
-from .protocols import PluginScanner
-
-class BaseScanner(A, B, C):
-    """Base class for plugin scanner implementations."""
-    def __init__((
-        self,
-        ignore_paths: Optional[List[str]] = None,
-        specific_paths: Optional[List[str]] = None,
-    )):
-        """Initialize the scanner with optional ignore paths and specific paths."""
-    def validate_plugin_path((self, path: Path)) -> bool:
-        """Validate if a path is a valid plugin for this scanner."""
-    def _should_ignore_path((self, path: Path)) -> bool:
-        """Check if a path should be ignored based on ignore patterns."""
-    def _filter_plugin_paths((self, paths: List[Path])) -> List[Path]:
-        """Filter plugin paths based on validation criteria."""
-    def _create_plugin_id((self, path: Path)) -> str:
-        """Create a unique plugin ID from its path."""
-
-def __init__((
-        self,
-        ignore_paths: Optional[List[str]] = None,
-        specific_paths: Optional[List[str]] = None,
-    )):
-    """Initialize the scanner with optional ignore paths and specific paths."""
-
-def plugin_type((self)) -> str:
-    """Return the plugin type this scanner handles (e.g., 'vst3', 'aufx')."""
-
-def supported_extensions((self)) -> List[str]:
-    """Return list of file extensions this scanner supports."""
-
-def find_plugin_files((self, paths: Optional[List[Path]] = None)) -> List[Path]:
-    """Find all plugin files of this scanner's type."""
-
-def scan_plugin((self, path: Path)) -> Optional[PluginInfo]:
-    """Scan a single plugin file and return its information."""
-
-def validate_plugin_path((self, path: Path)) -> bool:
-    """Validate if a path is a valid plugin for this scanner."""
-
-def _should_ignore_path((self, path: Path)) -> bool:
-    """Check if a path should be ignored based on ignore patterns."""
-
-def _filter_plugin_paths((self, paths: List[Path])) -> List[Path]:
-    """Filter plugin paths based on validation criteria."""
-
-def _create_plugin_id((self, path: Path)) -> str:
-    """Create a unique plugin ID from its path."""
+def yaml((output: str | None)):
+    """Export all plugins as YAML."""
 
 
 # File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/cache/__init__.py
@@ -4740,20 +4517,30 @@ from typing import Final
 # File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/core.py
 # Language: python
 
-import json
-from .data import get_cache_path, load_json_file
-from .scanner import PedalboardScanner
+from .cache.sqlite_backend import SQLiteCacheBackend
+from .data import get_cache_path
+from .scanner_isolated import IsolatedPedalboardScanner
 
 class PedalboardPluginary:
-    def __init__((self)):
-    def load_data((self)):
-    def list_plugins((self)):
+    """ Main class for interacting with the plugin library...."""
+    def __init__((self, **scanner_kwargs)):
+    def scan((self, rescan: bool = False, extra_folders: list[str] | None = None)):
+        """ Initiates a plugin scan...."""
+    def list_plugins((self, **filters)) -> list[dict]:
+        """Lists plugins from the cache, optionally applying filters."""
+    def get_plugin_details((self, plugin_id: str)) -> dict | None:
+        """Retrieves detailed information for a single plugin."""
 
-def __init__((self)):
+def __init__((self, **scanner_kwargs)):
 
-def load_data((self)):
+def scan((self, rescan: bool = False, extra_folders: list[str] | None = None)):
+    """ Initiates a plugin scan...."""
 
-def list_plugins((self)):
+def list_plugins((self, **filters)) -> list[dict]:
+    """Lists plugins from the cache, optionally applying filters."""
+
+def get_plugin_details((self, plugin_id: str)) -> dict | None:
+    """Retrieves detailed information for a single plugin."""
 
 
 # File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/data.py
@@ -4996,15 +4783,6 @@ from typing import Protocol, List, Optional, Dict, runtime_checkable
 from pathlib import Path
 from .models import PluginInfo
 
-class PluginScanner(P, r, o, t, o, c, o, l):
-    """Protocol defining the interface for plugin scanners."""
-    def find_plugin_files((self, paths: Optional[List[Path]] = None)) -> List[Path]:
-        """Find all plugin files of this scanner's type."""
-    def scan_plugin((self, path: Path)) -> Optional[PluginInfo]:
-        """Scan a single plugin file and return its information."""
-    def validate_plugin_path((self, path: Path)) -> bool:
-        """Validate if a path is a valid plugin for this scanner."""
-
 class ProgressReporter(P, r, o, t, o, c, o, l):
     """Protocol for progress reporting implementations."""
     def start((self, total: int, description: str = "")) -> None:
@@ -5028,15 +4806,6 @@ class CacheBackend(P, r, o, t, o, c, o, l):
         """Clear entire cache."""
     def exists((self)) -> bool:
         """Check if cache exists."""
-
-def find_plugin_files((self, paths: Optional[List[Path]] = None)) -> List[Path]:
-    """Find all plugin files of this scanner's type."""
-
-def scan_plugin((self, path: Path)) -> Optional[PluginInfo]:
-    """Scan a single plugin file and return its information."""
-
-def validate_plugin_path((self, path: Path)) -> bool:
-    """Validate if a path is a valid plugin for this scanner."""
 
 def start((self, total: int, description: str = "")) -> None:
     """Start progress tracking."""
@@ -5066,7 +4835,7 @@ def exists((self)) -> bool:
     """Check if cache exists."""
 
 
-<document index="27">
+<document index="28">
 <source>src/pedalboard_pluginary/resources/default_ignores.json</source>
 <document_content>
 [
@@ -5104,114 +4873,26 @@ def wrapper((*args: Any, **kwargs: Any)) -> Any:
 # File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/scan_single.py
 # Language: python
 
+import argparse
 import json
 import sys
 import os
 import warnings
 import io
+from pathlib import Path
+from pedalboard_pluginary.scanner_isolated import ScanJournal
 import pedalboard
 
-def scan_single_plugin((plugin_path: str, plugin_name: str, plugin_type: str)):
-    """Scan a single plugin and return JSON data."""
+def scan_single_plugin((
+    plugin_path: str,
+    plugin_name: str,
+    plugin_type: str,
+    journal_path: str,
+)):
+    """Scan a single plugin and write the result to the journal."""
 
 def main(()):
     """Main entry point."""
-
-
-# File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/scanner.py
-# Language: python
-
-import itertools
-import logging
-import os
-import platform
-import re
-import shutil
-import subprocess
-import sys
-import warnings
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
-from io import StringIO
-from pathlib import Path
-from urllib.parse import unquote, urlparse
-import pedalboard
-from rich.console import Console
-from rich.live import Live
-from rich.table import Table
-from .data import (
-    copy_default_ignores,
-    get_cache_path,
-    load_ignores,
-    load_json_file,
-    save_json_file,
-)
-from .utils import ensure_folder, from_pb_param
-
-class PedalboardScanner:
-    def __init__((self)):
-    def ensure_ignores((self)):
-    def save_plugins((self)):
-    def _list_aufx_plugins((self)):
-    def _find_aufx_plugins((self, plugin_paths=None)):
-    def _get_vst3_folders((self, extra_folders=None)):
-    def _find_vst3_plugins((self, extra_folders=None, plugin_paths=None)):
-    def get_plugin_info((self, plugin_path, plugin_name)):
-        """Get plugin parameters and metadata."""
-    def scan_typed_plugin_path((
-        self, plugin_type, plugin_key, plugin_path, plugin_fn, plugin_loader
-    )):
-    def scan_typed_plugins((self, plugin_type, found_plugins, plugin_loader)):
-        """Scan plugins with a beautiful live Rich table display."""
-    def scan_aufx_plugins((self, plugin_paths=None)):
-    def scan_vst3_plugins((self, extra_folders=None, plugin_paths=None)):
-    def scan_plugins((self, extra_folders=None, plugin_paths=None)):
-    def scan((self, extra_folders=None, plugin_paths=None)):
-    def rescan((self, extra_folders=None)):
-    def update((self, extra_folders=None)):
-    def get_json((self)):
-
-def suppress_output(()):
-    """Context manager to suppress stdout and stderr."""
-
-def __init__((self)):
-
-def ensure_ignores((self)):
-
-def save_plugins((self)):
-
-def _list_aufx_plugins((self)):
-
-def _find_aufx_plugins((self, plugin_paths=None)):
-
-def _get_vst3_folders((self, extra_folders=None)):
-
-def _find_vst3_plugins((self, extra_folders=None, plugin_paths=None)):
-
-def get_plugin_info((self, plugin_path, plugin_name)):
-    """Get plugin parameters and metadata."""
-
-def scan_typed_plugin_path((
-        self, plugin_type, plugin_key, plugin_path, plugin_fn, plugin_loader
-    )):
-
-def scan_typed_plugins((self, plugin_type, found_plugins, plugin_loader)):
-    """Scan plugins with a beautiful live Rich table display."""
-
-def create_progress_table((current_idx, current_plugin_path, current_vendor=None)):
-
-def scan_aufx_plugins((self, plugin_paths=None)):
-
-def scan_vst3_plugins((self, extra_folders=None, plugin_paths=None)):
-
-def scan_plugins((self, extra_folders=None, plugin_paths=None)):
-
-def scan((self, extra_folders=None, plugin_paths=None)):
-
-def rescan((self, extra_folders=None)):
-
-def update((self, extra_folders=None)):
-
-def get_json((self)):
 
 
 # File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/scanner_clean.py
@@ -5232,312 +4913,155 @@ def clean_scan((scanner_class, *args, **kwargs)):
 # File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/scanner_isolated.py
 # Language: python
 
-import json
 import logging
 import multiprocessing as mp
 import os
 import platform
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, List, Literal, Optional, Tuple
 from urllib.parse import unquote, urlparse
-import pedalboard
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn, MofNCompleteColumn
-from rich.table import Table
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeRemainingColumn,
+)
+from .cache.sqlite_backend import SQLiteCacheBackend
 from .data import (
     copy_default_ignores,
     get_cache_path,
     load_ignores,
-    load_json_file,
-    save_json_file,
 )
+from .serialization import deserialize_plugin_info, serialize_plugin_info
 from .utils import ensure_folder
+import time
+
+class JournalEntry:
+    """Represents a single entry in the scan journal."""
+
+class ScanJournal:
+    """ Manages a SQLite-based journal for resumable, transactional plugin scanning...."""
+    def __init__((self, journal_path: Path)):
+    def _get_connection((self)) -> sqlite3.Connection:
+        """Gets a thread-local database connection."""
+    def _create_schema((self)):
+        """Creates the necessary tables and indexes if they don't exist."""
+    def add_pending((self, plugin_paths: set[PluginId])):
+        """ Adds a list of plugin paths to the journal with 'pending' status,..."""
+    def get_pending_plugins((self)) -> set[PluginId]:
+        """Returns a set of all plugin paths marked as 'pending'."""
+    def update_status((
+        self,
+        plugin_id: PluginId,
+        status: ScanStatus,
+        result: dict[str, Any] | None = None,
+    )):
+        """Updates the status and result of a single plugin in the journal."""
+    def get_all_successful((self)) -> list[JournalEntry]:
+        """Retrieves all successful scan entries from the journal."""
+    def get_summary((self)) -> dict[ScanStatus, int]:
+        """Returns a summary of plugin counts for each status."""
+    def delete_journal((self)):
+        """Deletes the journal file."""
+    def close((self)):
+        """Closes the database connection."""
 
 class IsolatedPedalboardScanner:
-    """Scanner with complete process isolation for each plugin."""
-    def __init__((self, max_workers: Optional[int] = None, timeout: int = 30, verbose: bool = False)):
+    """Scanner with complete process isolation and resumable journaling."""
+    def __init__((self, max_workers: Optional[int] = None, timeout: int = 30, verbose: bool = False, cache_backend: Optional[Any] = None, journal_path: Optional[Path] = None)):
     def ensure_ignores((self)):
-        """Ensure ignores file exists."""
-    def save_plugins((self)):
-        """Save plugins and failed plugins to cache."""
     def _list_aufx_plugins((self)) -> List[str]:
-        """List Audio Unit plugins using auval."""
-    def _find_aufx_plugins((self)) -> List[Tuple[Path, str, str]]:
-        """Find AU plugins and return (path, vendor_name, plugin_name) tuples."""
+    def _find_plugins_to_scan((
+        self,
+        extra_folders: Optional[List[str]] = None,
+    )) -> set[tuple[str, str, str]]:
+        """Find all VST3 and AU plugins and return a set of (path, name, type)."""
+    def scan((self, extra_folders: Optional[List[str]] = None, rescan: bool = False)):
+        """Scan all plugins with journaling and process isolation."""
+    def _execute_scan((self, tasks: List[Tuple[str, str, str]])):
+        """Execute the scan using a ThreadPoolExecutor."""
+    def _commit_journal((self)):
+        """Commit successful results from the journal to the main cache."""
     def _get_vst3_folders((self, extra_folders=None)) -> List[Path]:
-        """Get VST3 plugin folders for the current platform."""
-    def _find_vst3_plugins((self, extra_folders=None)) -> List[Path]:
-        """Find VST3 plugins."""
-    def scan_plugins_parallel((self, plugin_tasks: List[Tuple[str, str, str, Optional[str]]])):
-        """ Scan plugins in parallel with complete process isolation...."""
-    def scan((self, extra_folders=None)):
-        """Scan all plugins with complete process isolation."""
-    def rescan((self, extra_folders=None)):
-        """Clear cache and rescan all plugins."""
-    def update((self, extra_folders=None)):
-        """Update with only new plugins."""
 
-def scan_plugin_isolated((plugin_path: str, plugin_name: str, plugin_type: str, timeout: int = 30, verbose: bool = False)) -> dict:
-    """ Scan a single plugin in complete isolation using subprocess...."""
+def __init__((self, journal_path: Path)):
 
-def __init__((self, max_workers: Optional[int] = None, timeout: int = 30, verbose: bool = False)):
+def _get_connection((self)) -> sqlite3.Connection:
+    """Gets a thread-local database connection."""
+
+def _create_schema((self)):
+    """Creates the necessary tables and indexes if they don't exist."""
+
+def add_pending((self, plugin_paths: set[PluginId])):
+    """ Adds a list of plugin paths to the journal with 'pending' status,..."""
+
+def get_pending_plugins((self)) -> set[PluginId]:
+    """Returns a set of all plugin paths marked as 'pending'."""
+
+def update_status((
+        self,
+        plugin_id: PluginId,
+        status: ScanStatus,
+        result: dict[str, Any] | None = None,
+    )):
+    """Updates the status and result of a single plugin in the journal."""
+
+def get_all_successful((self)) -> list[JournalEntry]:
+    """Retrieves all successful scan entries from the journal."""
+
+def get_summary((self)) -> dict[ScanStatus, int]:
+    """Returns a summary of plugin counts for each status."""
+
+def delete_journal((self)):
+    """Deletes the journal file."""
+
+def close((self)):
+    """Closes the database connection."""
+
+def run_scan_single((
+    plugin_path: str,
+    plugin_name: str,
+    plugin_type: str,
+    journal_path: str,
+    timeout: int,
+    verbose: bool,
+)) -> None:
+    """Wrapper to run scan_single.py in a subprocess."""
+
+def __init__((self, max_workers: Optional[int] = None, timeout: int = 30, verbose: bool = False, cache_backend: Optional[Any] = None, journal_path: Optional[Path] = None)):
 
 def ensure_ignores((self)):
-    """Ensure ignores file exists."""
-
-def save_plugins((self)):
-    """Save plugins and failed plugins to cache."""
 
 def _list_aufx_plugins((self)) -> List[str]:
-    """List Audio Unit plugins using auval."""
 
-def _find_aufx_plugins((self)) -> List[Tuple[Path, str, str]]:
-    """Find AU plugins and return (path, vendor_name, plugin_name) tuples."""
+def _find_plugins_to_scan((
+        self,
+        extra_folders: Optional[List[str]] = None,
+    )) -> set[tuple[str, str, str]]:
+    """Find all VST3 and AU plugins and return a set of (path, name, type)."""
+
+def scan((self, extra_folders: Optional[List[str]] = None, rescan: bool = False)):
+    """Scan all plugins with journaling and process isolation."""
+
+def _execute_scan((self, tasks: List[Tuple[str, str, str]])):
+    """Execute the scan using a ThreadPoolExecutor."""
+
+def _commit_journal((self)):
+    """Commit successful results from the journal to the main cache."""
 
 def _get_vst3_folders((self, extra_folders=None)) -> List[Path]:
-    """Get VST3 plugin folders for the current platform."""
-
-def _find_vst3_plugins((self, extra_folders=None)) -> List[Path]:
-    """Find VST3 plugins."""
-
-def scan_plugins_parallel((self, plugin_tasks: List[Tuple[str, str, str, Optional[str]]])):
-    """ Scan plugins in parallel with complete process isolation...."""
-
-def scan((self, extra_folders=None)):
-    """Scan all plugins with complete process isolation."""
-
-def rescan((self, extra_folders=None)):
-    """Clear cache and rescan all plugins."""
-
-def update((self, extra_folders=None)):
-    """Update with only new plugins."""
-
-
-# File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/scanner_parallel.py
-# Language: python
-
-import json
-import logging
-import multiprocessing as mp
-import os
-import platform
-import re
-import shutil
-import subprocess
-import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-from urllib.parse import unquote, urlparse
-import pedalboard
-from rich.console import Console
-from rich.live import Live
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn
-from rich.table import Table
-from .data import (
-    copy_default_ignores,
-    get_cache_path,
-    load_ignores,
-    load_json_file,
-    save_json_file,
-)
-from .utils import ensure_folder
-
-class ParallelPedalboardScanner:
-    """Scanner with parallel processing and process isolation."""
-    def __init__((self, max_workers: Optional[int] = None)):
-    def ensure_ignores((self)):
-    def save_plugins((self)):
-    def _list_aufx_plugins((self)):
-        """List Audio Unit plugins using auval."""
-    def _find_aufx_plugins((self)) -> List[Tuple[Path, str, str]]:
-        """Find AU plugins and return (path, vendor_name, plugin_name) tuples."""
-    def _get_vst3_folders((self, extra_folders=None)):
-        """Get VST3 plugin folders for the current platform."""
-    def _find_vst3_plugins((self, extra_folders=None)) -> List[Path]:
-        """Find VST3 plugins."""
-    def scan_plugins_parallel((self, plugin_tasks: List[Tuple[str, str, str, Optional[str]]])):
-        """Scan plugins in parallel with beautiful progress display."""
-    def scan((self, extra_folders=None)):
-        """Scan all plugins with parallel processing."""
-    def rescan((self, extra_folders=None)):
-        """Clear cache and rescan all plugins."""
-    def update((self, extra_folders=None)):
-        """Update with only new plugins."""
-
-def scan_plugin_subprocess((plugin_path: str, plugin_name: str, plugin_type: str)) -> dict:
-    """Scan a plugin in a subprocess for isolation."""
-
-def __init__((self, max_workers: Optional[int] = None)):
-
-def ensure_ignores((self)):
-
-def save_plugins((self)):
-
-def _list_aufx_plugins((self)):
-    """List Audio Unit plugins using auval."""
-
-def _find_aufx_plugins((self)) -> List[Tuple[Path, str, str]]:
-    """Find AU plugins and return (path, vendor_name, plugin_name) tuples."""
-
-def _get_vst3_folders((self, extra_folders=None)):
-    """Get VST3 plugin folders for the current platform."""
-
-def _find_vst3_plugins((self, extra_folders=None)) -> List[Path]:
-    """Find VST3 plugins."""
-
-def scan_plugins_parallel((self, plugin_tasks: List[Tuple[str, str, str, Optional[str]]])):
-    """Scan plugins in parallel with beautiful progress display."""
-
-def create_status_table((current_plugin="", vendor="", status="")):
-
-def scan((self, extra_folders=None)):
-    """Scan all plugins with parallel processing."""
-
-def rescan((self, extra_folders=None)):
-    """Clear cache and rescan all plugins."""
-
-def update((self, extra_folders=None)):
-    """Update with only new plugins."""
-
-
-# File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/scanner_worker.py
-# Language: python
-
-import json
-import sys
-import traceback
-from pathlib import Path
-import pedalboard
-from .utils import from_pb_param
-
-def scan_single_plugin((plugin_path: str, plugin_name: str, plugin_type: str)) -> dict:
-    """Scan a single plugin in isolation and return its info."""
-
-def main(()):
-    """Main entry point for worker process."""
-
-
-# File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/scanners/__init__.py
-# Language: python
-
-
-
-# File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/scanners/au_scanner.py
-# Language: python
-
-import logging
-import platform
-import subprocess
-from pathlib import Path
-from typing import Dict, List, Optional
-import pedalboard
-from ..async_scanner import AsyncScannerMixin
-from ..base_scanner import BaseScanner
-from ..constants import AU_EXTENSION, PLATFORM_MACOS, PLUGIN_TYPE_AU, PLUGIN_LOAD_TIMEOUT
-from ..exceptions import PlatformError, PluginLoadError, PluginScanError
-from ..models import PluginInfo, PluginParameter
-from ..timeout import sync_timeout, TimeoutError
-from ..utils import from_pb_param
-
-class AUScanner(B, a, s, e, S, c, a, n, n, e, r, ,,  , A, s, y, n, c, S, c, a, n, n, e, r, M, i, x, i, n):
-    """Scanner for Audio Unit plugins."""
-    def __init__((
-        self,
-        ignore_paths: Optional[List[str]] = None,
-        specific_paths: Optional[List[str]] = None,
-    )):
-        """Initialize the AU scanner with optional ignore paths and specific paths."""
-    def _get_au_plugin_locations((self)) -> List[Path]:
-        """Get standard AU plugin locations on macOS."""
-    def _list_aufx_plugins_raw((self)) -> List[str]:
-        """List all Audio Unit effects plugins using auval."""
-    def _parse_aufx_path_from_auval((self, plugin_str: str)) -> Optional[Path]:
-        """Parse the AU plugin path from auval output."""
-    def find_plugin_files((self, paths: Optional[List[Path]] = None)) -> List[Path]:
-        """Find all AU plugin files."""
-    def scan_plugin((self, path: Path)) -> Optional[PluginInfo]:
-        """Scan an AU plugin and return its information."""
-    def _scan_with_auval((self, path: Path)) -> Optional[PluginInfo]:
-        """Scan plugin using auval as fallback method."""
-
-def __init__((
-        self,
-        ignore_paths: Optional[List[str]] = None,
-        specific_paths: Optional[List[str]] = None,
-    )):
-    """Initialize the AU scanner with optional ignore paths and specific paths."""
-
-def plugin_type((self)) -> str:
-    """Return the plugin type this scanner handles."""
-
-def supported_extensions((self)) -> List[str]:
-    """Return list of file extensions this scanner supports."""
-
-def _get_au_plugin_locations((self)) -> List[Path]:
-    """Get standard AU plugin locations on macOS."""
-
-def _list_aufx_plugins_raw((self)) -> List[str]:
-    """List all Audio Unit effects plugins using auval."""
-
-def _parse_aufx_path_from_auval((self, plugin_str: str)) -> Optional[Path]:
-    """Parse the AU plugin path from auval output."""
-
-def find_plugin_files((self, paths: Optional[List[Path]] = None)) -> List[Path]:
-    """Find all AU plugin files."""
-
-def scan_plugin((self, path: Path)) -> Optional[PluginInfo]:
-    """Scan an AU plugin and return its information."""
-
-def _scan_with_auval((self, path: Path)) -> Optional[PluginInfo]:
-    """Scan plugin using auval as fallback method."""
-
-
-# File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/scanners/vst3_scanner.py
-# Language: python
-
-import logging
-import os
-import platform
-from pathlib import Path
-from typing import Dict, List, Optional
-import pedalboard
-from ..async_scanner import AsyncScannerMixin
-from ..base_scanner import BaseScanner
-from ..constants import PLUGIN_TYPE_VST3, VST3_EXTENSION, PLUGIN_LOAD_TIMEOUT
-from ..exceptions import PluginLoadError, PluginScanError
-from ..models import PluginInfo, PluginParameter
-from ..timeout import sync_timeout, TimeoutError
-from ..utils import from_pb_param
-
-class VST3Scanner(B, a, s, e, S, c, a, n, n, e, r, ,,  , A, s, y, n, c, S, c, a, n, n, e, r, M, i, x, i, n):
-    """Scanner for VST3 plugins."""
-    def _get_default_vst3_folders((self)) -> List[Path]:
-        """Get standard VST3 plugin folders for the current OS."""
-    def find_plugin_files((self, paths: Optional[List[Path]] = None)) -> List[Path]:
-        """Find all VST3 plugin files in standard and custom folders."""
-    def scan_plugin((self, path: Path)) -> Optional[PluginInfo]:
-        """Scan a VST3 plugin and return its information."""
-
-def plugin_type((self)) -> str:
-    """Return the plugin type this scanner handles."""
-
-def supported_extensions((self)) -> List[str]:
-    """Return list of file extensions this scanner supports."""
-
-def _get_default_vst3_folders((self)) -> List[Path]:
-    """Get standard VST3 plugin folders for the current OS."""
-
-def find_plugin_files((self, paths: Optional[List[Path]] = None)) -> List[Path]:
-    """Find all VST3 plugin files in standard and custom folders."""
-
-def scan_plugin((self, path: Path)) -> Optional[PluginInfo]:
-    """Scan a VST3 plugin and return its information."""
 
 
 # File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/src/pedalboard_pluginary/serialization.py
@@ -5563,6 +5087,12 @@ from .utils import ensure_folder
 
 class PluginSerializer:
     """Handles serialization and deserialization of plugin data."""
+
+def serialize_plugin_info((data: dict[str, Any])) -> str:
+    """Serializes plugin data to a JSON string."""
+
+def deserialize_plugin_info((json_str: str)) -> dict[str, Any]:
+    """Deserializes a JSON string to plugin data."""
 
 def parameter_to_dict((param: PluginParameter)) -> SerializedParameter:
     """Convert PluginParameter to serializable dictionary."""
@@ -5790,58 +5320,6 @@ def test_find_plugin_files_skips_directories_with_vst3_suffix((
     )):
 
 
-# File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/tests/test_cli.py
-# Language: python
-
-import os
-import subprocess
-import json
-import yaml
-from pathlib import Path
-from unittest.mock import patch, MagicMock
-import pytest
-from pedalboard_pluginary.constants import APP_NAME, PLUGINS_CACHE_FILENAME
-from pedalboard_pluginary.data import get_cache_path
-from pedalboard_pluginary.__main__ import list_json
-
-def get_plugins_cache_file(()):
-
-def manage_plugin_cache(()):
-    """Fixture to ensure plugin cache is handled before and after tests."""
-
-def run_cli_command((
-    cli_args_list,
-    mock_core_load_data_mock, # Original mock object for core.PedalboardPluginary.load_data
-    mock_scanner_save_plugins_mock, # Original mock object for scanner.PedalboardScanner.save_plugins
-    mock_scanner_update_mock, # Original mock object for scanner.PedalboardScanner.update
-    mock_scanner_scan_mock, # Original mock object for scanner.PedalboardScanner.scan
-    expected_exit_code=0
-)):
-    """Helper to run CLI commands and capture output."""
-
-def side_effect_scan_or_update((*args, **kwargs)):
-
-def test_cli_scan((MockScannerConstructor)):
-
-def mock_rescan_writes_cache((*args, **kwargs)):
-
-def test_cli_list((mock_load_json, capsys)):
-
-def side_effect_load_json((path_arg)):
-
-def test_cli_json_output((mock_load_json_for_json_cmd, capsys)):
-
-def side_effect_load_json((path_arg)):
-
-def test_cli_yaml_output((mock_load_json_for_yaml_cmd, capsys)):
-
-def side_effect_load_json((path_arg)):
-
-def test_cli_update((MockScannerConstructorForUpdate)):
-
-def mock_update_scan_writes_cache((*args, **kwargs)):
-
-
 # File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/tests/test_core.py
 # Language: python
 
@@ -6020,6 +5498,150 @@ def test_timeout_error_with_duration((self)):
 
 def test_scanner_error_with_scanner_type((self)):
     """Test scanner error with scanner type information."""
+
+
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/tests/test_failsafe_integration.py
+# Language: python
+
+import multiprocessing
+import os
+import signal
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+import pytest
+from pedalboard_pluginary.scanner_isolated import IsolatedPedalboardScanner, ScanJournal, run_scan_single
+from pedalboard_pluginary.cache.sqlite_backend import SQLiteCacheBackend
+
+class TestWorkerProcessCrash:
+    """Test scenarios where worker processes crash during scanning."""
+    def test_worker_crash_simulation((self, test_cache_dir, mock_plugin_discovery)):
+        """Simulate a worker process crashing mid-scan."""
+    def test_worker_timeout((self, test_cache_dir, mock_plugin_discovery)):
+        """Test worker timeout handling."""
+
+class TestMainProcessCrash:
+    """Test scenarios where the main scanner process crashes."""
+    def test_main_process_crash_and_resume((self, test_cache_dir, mock_plugin_discovery)):
+        """Simulate main process crash and verify resume functionality."""
+
+class TestCommitPhaseCrash:
+    """Test scenarios where crashes occur during the commit phase."""
+    def test_crash_during_commit((self, test_cache_dir, mock_plugin_discovery)):
+        """Simulate a crash during the commit phase."""
+    def test_atomic_commit_protection((self, test_cache_dir, mock_plugin_discovery)):
+        """Test that main cache remains untouched if commit fails."""
+
+class TestEdgeCases:
+    """Test edge cases and boundary conditions."""
+    def test_empty_journal((self, test_cache_dir)):
+        """Test behavior with an empty journal."""
+    def test_all_failed_journal((self, test_cache_dir, mock_plugin_discovery)):
+        """Test journal with all plugins failed."""
+    def test_mixed_status_journal((self, test_cache_dir, mock_plugin_discovery)):
+        """Test journal with mixed success/failure/timeout statuses."""
+    def test_concurrent_journal_access((self, test_cache_dir)):
+        """Test concurrent access to journal from multiple threads."""
+
+class TestRealProcessCrash:
+    """Test with actual subprocess crashes (not just mocked)."""
+
+def test_cache_dir((tmp_path: Path)) -> Path:
+    """Create a temporary cache directory."""
+
+def mock_plugin_discovery(()):
+    """Mock plugin discovery to return test plugins."""
+
+def mock_find_plugins((self, extra_folders=None)):
+
+def test_worker_crash_simulation((self, test_cache_dir, mock_plugin_discovery)):
+    """Simulate a worker process crashing mid-scan."""
+
+def mock_run_scan_single_crash((plugin_path, plugin_name, plugin_type, 
+                                           journal_path_str, timeout, verbose)):
+
+def test_worker_timeout((self, test_cache_dir, mock_plugin_discovery)):
+    """Test worker timeout handling."""
+
+def mock_run_scan_single_timeout((plugin_path, plugin_name, plugin_type,
+                                            journal_path_str, timeout, verbose)):
+
+def test_main_process_crash_and_resume((self, test_cache_dir, mock_plugin_discovery)):
+    """Simulate main process crash and verify resume functionality."""
+
+def mock_run_scan_single_partial((plugin_path, plugin_name, plugin_type,
+                                            journal_path_str, timeout, verbose)):
+
+def mock_run_scan_single_resume((plugin_path, plugin_name, plugin_type,
+                                           journal_path_str, timeout, verbose)):
+
+def test_crash_during_commit((self, test_cache_dir, mock_plugin_discovery)):
+    """Simulate a crash during the commit phase."""
+
+def mock_run_scan_single_success((plugin_path, plugin_name, plugin_type,
+                                            journal_path_str, timeout, verbose)):
+
+def test_atomic_commit_protection((self, test_cache_dir, mock_plugin_discovery)):
+    """Test that main cache remains untouched if commit fails."""
+
+def mock_run_scan_single_success((plugin_path, plugin_name, plugin_type,
+                                            journal_path_str, timeout, verbose)):
+
+def test_empty_journal((self, test_cache_dir)):
+    """Test behavior with an empty journal."""
+
+def test_all_failed_journal((self, test_cache_dir, mock_plugin_discovery)):
+    """Test journal with all plugins failed."""
+
+def mock_run_scan_single_fail((plugin_path, plugin_name, plugin_type,
+                                         journal_path_str, timeout, verbose)):
+
+def test_mixed_status_journal((self, test_cache_dir, mock_plugin_discovery)):
+    """Test journal with mixed success/failure/timeout statuses."""
+
+def mock_run_scan_single_mixed((plugin_path, plugin_name, plugin_type,
+                                          journal_path_str, timeout, verbose)):
+
+def test_concurrent_journal_access((self, test_cache_dir)):
+    """Test concurrent access to journal from multiple threads."""
+
+def worker_thread((thread_id: int, plugin_ids: list)):
+
+def test_real_subprocess_kill((self, test_cache_dir, tmp_path)):
+    """Test killing an actual subprocess during scanning."""
+
+
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/tests/test_journal.py
+# Language: python
+
+import sqlite3
+import time
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+import pytest
+from pedalboard_pluginary.scanner_isolated import IsolatedPedalboardScanner, ScanJournal
+
+def journal_path((tmp_path: Path)) -> Path:
+
+def journal((journal_path: Path)) -> ScanJournal:
+
+def test_journal_creation((journal: ScanJournal, journal_path: Path)):
+
+def test_add_and_get_pending((journal: ScanJournal)):
+
+def test_update_status((journal: ScanJournal)):
+
+def test_get_summary((journal: ScanJournal)):
+
+def test_scan_resume((mock_run_scan_single, tmp_path: Path)):
+    """Simulate a crash and resume a scan."""
+
+def side_effect_crash((*args, **kwargs)):
 
 
 # File: /Users/adam/Developer/vcs/github.twardoch/pub/pedalboard-pluginary/tests/test_models.py
@@ -6246,7 +5868,7 @@ from pedalboard_pluginary.utils import ensure_folder
 def test_ensure_folder((tmp_path)):
 
 
-<document index="28">
+<document index="29">
 <source>tox.ini</source>
 <document_content>
 # Tox configuration file

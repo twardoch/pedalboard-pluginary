@@ -93,99 +93,192 @@ Requires Python 3.9 or newer.
 
 ## Command-Line Usage
 
-Pedalboard Pluginary provides a powerful and user-friendly command-line interface (`pbpluginary`).
+Pedalboard Pluginary provides a powerful and user-friendly command-line interface that can be invoked using either `pbpluginary` or `python -m pedalboard_pluginary`.
 
-*(Note: The CLI is being actively developed. The commands below reflect the intended modern interface based on Click and Rich, as outlined in the project's development plan. Some commands/options might differ slightly if you're on an older version.)*
+The CLI offers comprehensive plugin management capabilities with multiple output formats and filtering options. All commands support `--help` for detailed usage information.
 
-Here are some common commands:
+### Available Commands
 
-### Scan for Plugins
+#### 1. Scan for Plugins
 
-*   **Scan all plugins (default: async, SQLite cache):**
-    ```bash
-    pbpluginary scan
-    ```
-*   **Force a full rescan, ignoring existing cache:**
-    ```bash
-    pbpluginary scan --force
-    ```
-*   **Scan synchronously:**
-    ```bash
-    pbpluginary scan --sync
-    ```
-*   **Scan additional custom folders:**
-    ```bash
-    pbpluginary scan --folders "/path/to/my/vst3s,/another/path/to/plugins"
-    ```
-*   **Adjust concurrency for async scanning:**
-    ```bash
-    pbpluginary scan --concurrency 20
-    ```
+The `scan` command discovers and catalogs audio plugins on your system:
 
-### List and Search Plugins
-
-*   **List all discovered plugins (default: table format):**
-    ```bash
-    pbpluginary list
-    ```
-*   **List plugins in JSON format:**
-    ```bash
-    pbpluginary list --format json
-    ```
-*   **Filter plugins by name or manufacturer (full-text search):**
-    ```bash
-    pbpluginary list --filter "Reverb"
-    ```
-*   **Filter by plugin type (VST3 or AU):**
-    ```bash
-    pbpluginary list --type vst3
-    ```
-*   **Filter by manufacturer:**
-    ```bash
-    pbpluginary list --manufacturer "FabFilter"
-    ```
-*   **Advanced search (combines with list filters or uses dedicated `search`):**
-    ```bash
-    pbpluginary search "Equalizer" --type au
-    pbpluginary search "Pro-Q" --fuzzy # Fuzzy search for approximate matches
-    ```
-
-### Get Plugin Information
-
-*   **Show detailed information for a specific plugin by its ID:**
-    ```bash
-    pbpluginary info "vst3/FabFilter Pro-Q 3"
-    ```
-    *(Plugin IDs are typically `type/filename_stem`, e.g., `vst3/MassiveX` or `aufx/ChannelEQ`)*
-*   **Test if a plugin can be loaded:**
-    ```bash
-    pbpluginary info "vst3/Serum" --test
-    ```
-
-### Manage Cache
-
-*   **View cache statistics:**
-    ```bash
-    pbpluginary cache stats
-    ```
-*   **Clear the plugin cache:**
-    ```bash
-    pbpluginary cache clear
-    ```
-*   **Attempt to repair a corrupted cache:**
-    ```bash
-    pbpluginary cache repair
-    ```
-*   **Migrate cache format (e.g., from a legacy JSON cache to SQLite):**
-    ```bash
-    pbpluginary cache migrate --to sqlite
-    ```
-
-For a full list of commands and options, use:
 ```bash
-pbpluginary --help
-pbpluginary <command> --help
+# Basic scan (uses cache if available, scans if needed)
+pbpluginary scan
+
+# Force a complete rescan, clearing existing cache
+pbpluginary scan --rescan
+
+# Scan additional folders beyond standard locations
+pbpluginary scan --extra-folders /path/to/custom/plugins
+
+# Adjust parallel processing (default: 8 workers)
+pbpluginary scan --workers 4
+
+# Set timeout per plugin in seconds (default: 30)
+pbpluginary scan --timeout 60
+
+# Combine options for comprehensive scanning
+pbpluginary scan --rescan --extra-folders /my/vst3 --workers 16
 ```
+
+**Scanning Features:**
+- **Process Isolation**: Each plugin is scanned in a separate process for maximum stability
+- **Resumable Scans**: If scanning is interrupted, it automatically resumes from where it left off
+- **Parallel Processing**: Utilizes multiple CPU cores for faster scanning
+- **Timeout Protection**: Plugins that hang are automatically skipped after the timeout period
+- **Progress Display**: Beautiful Rich progress bars show real-time scanning status
+
+#### 2. List and Filter Plugins
+
+The `list` command displays your plugin catalog with powerful filtering options:
+
+```bash
+# List all plugins in table format (default)
+pbpluginary list
+
+# Output in different formats
+pbpluginary list --format json      # JSON output
+pbpluginary list --format yaml      # YAML output (requires PyYAML)
+pbpluginary list --format table     # Table output (default)
+
+# Filter by plugin name (case-insensitive)
+pbpluginary list --name "reverb"
+
+# Filter by manufacturer/vendor
+pbpluginary list --vendor "Native Instruments"
+
+# Filter by plugin type
+pbpluginary list --type vst3         # VST3 plugins only
+pbpluginary list --type aufx         # Audio Unit plugins only
+
+# Combine filters
+pbpluginary list --vendor "FabFilter" --type vst3 --format json
+
+# Export filtered results to file using shell redirection
+pbpluginary list --vendor "Waves" --format json > waves_plugins.json
+```
+
+#### 3. Export Plugins (JSON/YAML)
+
+Dedicated export commands for quick full catalog exports:
+
+```bash
+# Export all plugins as JSON
+pbpluginary json                    # Output to stdout
+pbpluginary json --output plugins.json      # Save to file
+pbpluginary json --pretty           # Pretty-printed JSON
+
+# Export all plugins as YAML
+pbpluginary yaml                    # Output to stdout
+pbpluginary yaml --output plugins.yaml      # Save to file
+
+# Note: YAML export requires PyYAML installation:
+# pip install pyyaml
+```
+
+**Export Formats Include:**
+- Plugin name and ID
+- Plugin type (VST3/AU)
+- File path
+- Manufacturer/vendor
+- Parameters and their default values
+- Additional metadata
+
+#### 4. View Scanner Information
+
+The `info` command provides detailed statistics about your plugin collection:
+
+```bash
+pbpluginary info
+```
+
+**Displays:**
+- Total number of cached plugins
+- Breakdown by plugin type (VST3, AU)
+- Top manufacturers/vendors
+- Cache file locations and sizes
+- Detection of interrupted scans (active journal)
+
+Example output:
+```
+Plugin Scanner Statistics
+Total plugins cached: 237
+
+Plugins by type:
+  aufx: 89
+  vst3: 148
+
+Top vendors:
+  Native Instruments: 42
+  FabFilter: 15
+  Waves: 38
+  ...
+
+Cache locations:
+  Main cache: ~/Library/Caches/com.twardoch.pedalboard-pluginary/plugins.db
+  Cache size: 2.34 MB
+```
+
+#### 5. Cache Management
+
+The `clear` command manages the plugin cache:
+
+```bash
+# Clear the entire plugin cache (with confirmation prompt)
+pbpluginary clear
+
+# After clearing, run scan to rebuild cache
+pbpluginary scan
+```
+
+### Global Options
+
+All commands support these global options:
+
+```bash
+# Enable verbose logging for debugging
+pbpluginary --verbose scan
+
+# Show help for the main command
+pbpluginary --help
+
+# Show help for specific commands
+pbpluginary scan --help
+pbpluginary list --help
+```
+
+### Quick Start Examples
+
+```bash
+# First-time setup: scan all plugins
+pbpluginary scan
+
+# View summary of discovered plugins
+pbpluginary info
+
+# List all Native Instruments VST3 plugins
+pbpluginary list --vendor "Native Instruments" --type vst3
+
+# Export all plugins to JSON for backup
+pbpluginary json --output my_plugins_backup.json --pretty
+
+# Clear cache and rescan everything
+pbpluginary clear
+pbpluginary scan --rescan
+```
+
+### Platform-Specific Notes
+
+- **macOS**: Scans both VST3 (from `/Library/Audio/Plug-Ins/VST3` and `~/Library/Audio/Plug-Ins/VST3`) and Audio Units
+- **Windows**: Scans VST3 plugins from `C:\Program Files\Common Files\VST3`
+- **Linux**: Scans VST3 plugins from `~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`
+
+Cache files are stored in platform-specific locations:
+- **macOS**: `~/Library/Caches/com.twardoch.pedalboard-pluginary/`
+- **Linux**: `~/.cache/com.twardoch.pedalboard-pluginary/`
+- **Windows**: `%LOCALAPPDATA%\com.twardoch.pedalboard-pluginary\Cache\`
 
 ## Python Library Usage
 

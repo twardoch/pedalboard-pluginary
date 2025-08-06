@@ -2,250 +2,334 @@
 # this_file: src/pedalboard_pluginary/scanner_isolated.py
 
 """
-Isolated scanner that orchestrates subprocess calls to scan_single.py.
-Complete process isolation ensures plugin crashes don't affect the main scanner.
+Isolated, resumable scanner that orchestrates subprocess calls to scan_single.py.
+Complete process isolation ensures plugin crashes don't affect the main scanner,
+and the journaling system ensures scans can be resumed after a crash.
 """
+from __future__ import annotations
 
-import json
 import logging
 import multiprocessing as mp
 import os
 import platform
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, List, Literal, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
-import pedalboard
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn, MofNCompleteColumn
-from rich.table import Table
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeRemainingColumn,
+)
 
+from .cache.sqlite_backend import SQLiteCacheBackend
 from .data import (
     copy_default_ignores,
     get_cache_path,
     load_ignores,
-    load_json_file,
-    save_json_file,
 )
+from .serialization import deserialize_plugin_info, serialize_plugin_info
 from .utils import ensure_folder
 
 logger = logging.getLogger("IsolatedScanner")
 console = Console()
 
+# Journal types
+PluginId = str
+ScanStatus = Literal["pending", "scanning", "success", "failed", "timeout"]
 
-def scan_plugin_isolated(plugin_path: str, plugin_name: str, plugin_type: str, timeout: int = 30, verbose: bool = False) -> dict:
+
+@dataclass
+class JournalEntry:
+    """Represents a single entry in the scan journal."""
+
+    plugin_id: PluginId
+    status: ScanStatus
+    result: dict[str, Any] | None = None
+    timestamp: float | None = None
+
+
+class ScanJournal:
     """
-    Scan a single plugin in complete isolation using subprocess.
-    
-    Args:
-        plugin_path: Path to the plugin
-        plugin_name: Name of the plugin
-        plugin_type: Type of plugin (vst3, aufx)
-        timeout: Timeout in seconds
-        
-    Returns:
-        Dictionary with plugin data or error information
+    Manages a SQLite-based journal for resumable, transactional plugin scanning.
+
+    This class provides a crash-proof mechanism to track the progress of a plugin
+    scan. Each worker process writes its result directly to the journal file,
+    ensuring that no progress is lost if the main process crashes.
     """
+
+    def __init__(self, journal_path: Path):
+        self.journal_path = journal_path
+        self._local = threading.local()
+        self._create_schema()
+
+    def _get_connection(self) -> sqlite3.Connection:
+        """Gets a thread-local database connection."""
+        if not hasattr(self._local, "connection"):
+            self._local.connection = sqlite3.connect(
+                self.journal_path, check_same_thread=False
+            )
+            self._local.connection.row_factory = sqlite3.Row
+        return self._local.connection
+
+    def _create_schema(self):
+        """Creates the necessary tables and indexes if they don't exist."""
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS journal (
+                    plugin_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    result_json TEXT,
+                    timestamp REAL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_status ON journal (status)
+                """
+            )
+
+    def add_pending(self, plugin_paths: set[PluginId]):
+        """
+        Adds a list of plugin paths to the journal with 'pending' status,
+        ignoring any that already exist.
+        """
+        with self._get_connection() as conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO journal (plugin_id, status) VALUES (?, 'pending')",
+                [(path,) for path in plugin_paths],
+            )
+
+    def get_pending_plugins(self) -> set[PluginId]:
+        """Returns a set of all plugin paths marked as 'pending'."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("SELECT plugin_id FROM journal WHERE status = 'pending'")
+            return {row["plugin_id"] for row in cursor.fetchall()}
+
+    def update_status(
+        self,
+        plugin_id: PluginId,
+        status: ScanStatus,
+        result: dict[str, Any] | None = None,
+    ):
+        """Updates the status and result of a single plugin in the journal."""
+        import time
+
+        result_json = (
+            serialize_plugin_info(result) if result and status == "success" else None
+        )
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE journal
+                SET status = ?, result_json = ?, timestamp = ?
+                WHERE plugin_id = ?
+                """,
+                (status, result_json, time.time(), plugin_id),
+            )
+
+    def get_all_successful(self) -> list[JournalEntry]:
+        """Retrieves all successful scan entries from the journal."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM journal WHERE status = 'success' AND result_json IS NOT NULL"
+            )
+            entries = []
+            for row in cursor.fetchall():
+                entries.append(
+                    JournalEntry(
+                        plugin_id=row["plugin_id"],
+                        status="success",
+                        result=deserialize_plugin_info(row["result_json"]),
+                        timestamp=row["timestamp"],
+                    )
+                )
+            return entries
+
+    def get_summary(self) -> dict[ScanStatus, int]:
+        """Returns a summary of plugin counts for each status."""
+        summary: dict[ScanStatus, int] = {
+            "pending": 0,
+            "scanning": 0,
+            "success": 0,
+            "failed": 0,
+            "timeout": 0,
+        }
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT status, COUNT(*) as count FROM journal GROUP BY status"
+            )
+            for row in cursor.fetchall():
+                if row["status"] in summary:
+                    summary[row["status"]] = row["count"]
+        return summary
+
+    def delete_journal(self):
+        """Deletes the journal file."""
+        if self.journal_path.exists():
+            self.journal_path.unlink()
+
+    def close(self):
+        """Closes the database connection."""
+        if hasattr(self._local, "connection"):
+            self._local.connection.close()
+
+def run_scan_single(
+    plugin_path: str,
+    plugin_name: str,
+    plugin_type: str,
+    journal_path: str,
+    timeout: int,
+    verbose: bool,
+) -> None:
+    """Wrapper to run scan_single.py in a subprocess."""
+    journal = ScanJournal(Path(journal_path))
+    journal.update_status(plugin_path, "scanning")
+
     try:
-        # Run scan_single.py as a completely separate process
         cmd = [
             sys.executable,
-            "-m", 
-            "pedalboard_pluginary.scan_single",
+            str(Path(__file__).parent / "scan_single.py"),
+            "--plugin-path",
             plugin_path,
+            "--plugin-name",
             plugin_name,
-            plugin_type
+            "--plugin-type",
+            plugin_type,
+            "--journal-path",
+            journal_path,
         ]
-        
+
         if verbose:
-            logger.debug(f"Executing isolated scan: {' '.join(cmd)}")
-        
-        # Run with timeout and capture output
-        result = subprocess.run(
+            logger.debug(f"Executing: {' '.join(cmd)}")
+
+        subprocess.run(
             cmd,
-            capture_output=True,
+            capture_output=not verbose,
             text=True,
             timeout=timeout,
-            env={**os.environ, 'PYTHONWARNINGS': 'ignore'}
+            check=True,
+            env={**os.environ, 'PYTHONWARNINGS': 'ignore'},
         )
-        
-        if verbose and result.stderr:
-            logger.debug(f"Scan stderr for {plugin_name}: {result.stderr}")
-        
-        if result.stdout:
-            try:
-                return json.loads(result.stdout)
-            except json.JSONDecodeError:
-                return {
-                    "success": False,
-                    "path": plugin_path,
-                    "name": plugin_name,
-                    "type": plugin_type,
-                    "error": f"Invalid JSON output: {result.stdout[:100]}"
-                }
-        else:
-            return {
-                "success": False,
-                "path": plugin_path,
-                "name": plugin_name,
-                "type": plugin_type,
-                "error": f"No output from scanner (exit code: {result.returncode})"
-            }
-            
+
     except subprocess.TimeoutExpired:
-        return {
-            "success": False,
-            "path": plugin_path,
-            "name": plugin_name,
-            "type": plugin_type,
-            "error": f"Scan timed out after {timeout} seconds"
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "path": plugin_path,
-            "name": plugin_name,
-            "type": plugin_type,
-            "error": str(e)
-        }
+        journal.update_status(plugin_path, "timeout")
+    except (subprocess.CalledProcessError, Exception) as e:
+        journal.update_status(plugin_path, "failed", {"error": str(e)})
+    finally:
+        journal.close()
 
 
 class IsolatedPedalboardScanner:
-    """Scanner with complete process isolation for each plugin."""
-    
-    RE_AUFX = re.compile(r"aufx\s+(\w+)\s+(\w+)\s+-\s+(.*?):\s+(.*?)\s+\((.*?)\)")
-    
-    def __init__(self, max_workers: Optional[int] = None, timeout: int = 30, verbose: bool = False):
-        self.plugins_path = get_cache_path("plugins")
-        self.plugins = {}
-        self.failed_plugins = {}
+    """Scanner with complete process isolation and resumable journaling."""
+
+    RE_AUFX = re.compile(r"aufx\s+(\w+)\s+(\w+)\s+-\s+(.*?):\s+(.*?)\s+\((\d+)\)")
+
+    def __init__(self, max_workers: Optional[int] = None, timeout: int = 30, verbose: bool = False, cache_backend: Optional[Any] = None, journal_path: Optional[Path] = None):
+        self.cache_backend = cache_backend or SQLiteCacheBackend(db_path=get_cache_path("plugins.db"))
+        self.journal_path = self.cache_backend.db_path.parent / "scan_journal.db"
+        self.journal_path = get_cache_path("scan_journal.db")
+        self.journal = ScanJournal(self.journal_path)
         self.max_workers = max_workers or min(mp.cpu_count(), 8)
         self.timeout = timeout
         self.verbose = verbose
         self.ensure_ignores()
-        
+
         if self.verbose:
             logger.setLevel(logging.DEBUG)
-            console.print(f"[dim]IsolatedPedalboardScanner initialized:[/dim]")
-            console.print(f"  [dim]• Max workers: {self.max_workers}[/dim]")
-            console.print(f"  [dim]• Timeout: {self.timeout}s[/dim]")
-            console.print(f"  [dim]• Cache path: {self.plugins_path}[/dim]")
-        
+
     def ensure_ignores(self):
-        """Ensure ignores file exists."""
-        self.ignores_path = get_cache_path("ignores")
-        if self.ignores_path.is_dir():
-            shutil.rmtree(self.ignores_path)
+        self.ignores_path = get_cache_path("ignores.json")
         if not self.ignores_path.exists():
             copy_default_ignores(self.ignores_path)
         self.ignores = load_ignores(self.ignores_path)
-    
-    def save_plugins(self):
-        """Save plugins and failed plugins to cache."""
-        ensure_folder(self.plugins_path)
-        save_json_file(dict(sorted(self.plugins.items())), self.plugins_path)
-        
-        if self.failed_plugins:
-            failed_path = get_cache_path("failed_plugins")
-            save_json_file(self.failed_plugins, failed_path)
-    
+
     def _list_aufx_plugins(self) -> List[str]:
-        """List Audio Unit plugins using auval."""
         try:
             result = subprocess.run(
-                ["auval", "-l"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                check=True,
+                ["auval", "-l"], capture_output=True, text=True, check=True
             )
             return result.stdout.splitlines()
         except (subprocess.CalledProcessError, FileNotFoundError):
             return []
-    
-    def _find_aufx_plugins(self) -> List[Tuple[Path, str, str]]:
-        """Find AU plugins and return (path, vendor_name, plugin_name) tuples."""
-        aufx_plugins = []
-        plugin_type = "aufx"
-        
-        for line in self._list_aufx_plugins():
-            match = self.RE_AUFX.match(line)
-            if match:
-                (plugin_code, vendor_code, vendor_name, 
-                 plugin_name, plugin_url) = match.groups()
-                
-                plugin_path = Path(unquote(urlparse(plugin_url).path)).resolve()
-                plugin_fn = plugin_path.stem
-                plugin_key = f"{plugin_type}/{plugin_fn}"
-                
-                if plugin_key not in self.ignores:
-                    aufx_plugins.append((plugin_path, vendor_name, plugin_name))
-                    
-        return aufx_plugins
-    
-    def _get_vst3_folders(self, extra_folders=None) -> List[Path]:
-        """Get VST3 plugin folders for the current platform."""
-        os_name = platform.system()
-        
-        if os_name == "Windows":
-            folders = [
-                Path(os.getenv("ProgramFiles", "") + r"\Common Files\VST3"),
-                Path(os.getenv("ProgramFiles(x86)", "") + r"\Common Files\VST3"),
-            ]
-        elif os_name == "Darwin":  # macOS
-            folders = [
-                Path("~/Library/Audio/Plug-Ins/VST3").expanduser(),
-                Path("/Library/Audio/Plug-Ins/VST3"),
-            ]
-        elif os_name == "Linux":
-            folders = [
-                Path("~/.vst3").expanduser(),
-                Path("/usr/lib/vst3"),
-                Path("/usr/local/lib/vst3"),
-            ]
+
+    def _find_plugins_to_scan(
+        self,
+        extra_folders: Optional[List[str]] = None,
+    ) -> set[tuple[str, str, str]]:
+        """Find all VST3 and AU plugins and return a set of (path, name, type)."""
+        plugin_tasks = set()
+
+        # VST3
+        for folder in self._get_vst3_folders(extra_folders):
+            for plugin_path in folder.glob("*.vst3"):
+                if f"vst3/{plugin_path.stem}" not in self.ignores:
+                    # For VST3, we often have multiple plugins in one file.
+                    # We will treat the file path as the initial task.
+                    plugin_tasks.add((str(plugin_path), plugin_path.stem, "vst3"))
+
+        # AU (macOS only)
+        if platform.system() == "Darwin":
+            for line in self._list_aufx_plugins():
+                match = self.RE_AUFX.match(line)
+                if match:
+                    _, _, vendor, name, url = match.groups()
+                    path = Path(unquote(urlparse(url).path)).resolve()
+                    if f"aufx/{path.stem}" not in self.ignores:
+                        plugin_tasks.add((str(path), name, "aufx"))
+
+        return plugin_tasks
+
+    def scan(self, extra_folders: Optional[List[str]] = None, rescan: bool = False):
+        self.journal = ScanJournal(self.journal_path)
+        """Scan all plugins with journaling and process isolation."""
+        if rescan:
+            console.print("[bold yellow]Clearing cache and starting fresh scan...[/bold yellow]")
+            self.cache_backend.clear()
+            self.journal.delete_journal()
+
+        is_resumed_scan = self.journal_path.exists()
+        if is_resumed_scan:
+            console.print("[bold green]Resuming previous scan...[/bold green]")
         else:
-            folders = []
-        
-        if extra_folders:
-            folders.extend(Path(p) for p in extra_folders)
-        
-        return [folder for folder in folders if folder.exists()]
-    
-    def _find_vst3_plugins(self, extra_folders=None) -> List[Path]:
-        """Find VST3 plugins."""
-        vst3_plugins = []
-        plugin_type = "vst3"
-        
-        for folder in self._get_vst3_folders(extra_folders=extra_folders):
-            for plugin_path in folder.glob(f"*.{plugin_type}"):
-                plugin_fn = plugin_path.stem
-                plugin_key = f"{plugin_type}/{plugin_fn}"
-                if plugin_key not in self.ignores:
-                    vst3_plugins.append(plugin_path)
-                    
-        return vst3_plugins
-    
-    def scan_plugins_parallel(self, plugin_tasks: List[Tuple[str, str, str, Optional[str]]]):
-        """
-        Scan plugins in parallel with complete process isolation.
-        
-        Args:
-            plugin_tasks: List of (path, name, type, vendor) tuples
-        """
-        total_tasks = len(plugin_tasks)
-        
-        if total_tasks == 0:
-            console.print("[yellow]No plugins to scan[/yellow]")
-            return
-        
-        console.print(f"\n[cyan]🔍 Scanning {total_tasks} plugins with process isolation...[/cyan]")
-        
-        # Create progress display
+            console.print("[bold cyan]Starting new plugin scan...[/bold cyan]")
+
+        # 1. Discover all plugins
+        all_plugins = self._find_plugins_to_scan(extra_folders)
+        self.journal.add_pending({path for path, _, _ in all_plugins})
+
+        # 2. Get the list of plugins that still need scanning
+        plugins_to_scan = self.journal.get_pending_plugins()
+        tasks_to_submit = [
+            task for task in all_plugins if task[0] in plugins_to_scan
+        ]
+
+        if not tasks_to_submit:
+            console.print("No new plugins to scan.")
+        else:
+            # 3. Scan in parallel
+            self._execute_scan(tasks_to_submit)
+
+        # 4. Commit results to main cache
+        self._commit_journal()
+
+    def _execute_scan(self, tasks: List[Tuple[str, str, str]]):
+        """Execute the scan using a ThreadPoolExecutor."""
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -253,202 +337,74 @@ class IsolatedPedalboardScanner:
             MofNCompleteColumn(),
             TimeRemainingColumn(),
             console=console,
-            transient=False
         ) as progress:
-            
-            main_task = progress.add_task(
-                "[cyan]Scanning plugins", total=total_tasks
-            )
-            
-            completed = 0
-            failed = 0
-            
-            # Use ThreadPoolExecutor for subprocess calls
-            # (ProcessPoolExecutor would be overkill since we're already using subprocesses)
+            scan_task = progress.add_task("[cyan]Scanning...", total=len(tasks))
+
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                # Submit all tasks
-                future_to_task = {}
-                for path, name, plugin_type, vendor in plugin_tasks:
-                    future = executor.submit(
-                        scan_plugin_isolated, 
-                        str(path), 
-                        name, 
-                        plugin_type,
-                        self.timeout,
-                        self.verbose
-                    )
-                    future_to_task[future] = (path, name, plugin_type, vendor)
-                
-                # Process completed tasks
-                for future in as_completed(future_to_task):
-                    path, name, plugin_type, vendor = future_to_task[future]
-                    
+                futures = {
+                    executor.submit(
+                        run_scan_single,
+                        path, name, type, str(self.journal_path), self.timeout, self.verbose
+                    ): (path, name)
+                    for path, name, type in tasks
+                }
+
+                for future in as_completed(futures):
+                    path, name = futures[future]
                     try:
-                        result = future.result(timeout=1)
-                        
-                        if result.get("success", False):
-                            # Store successful plugin
-                            plugin_entry = {
-                                "name": name,
-                                "path": str(path),
-                                "filename": Path(path).stem,
-                                "type": plugin_type,
-                                "params": result.get("params", {}),
-                            }
-                            
-                            # Add manufacturer if available
-                            if result.get("manufacturer"):
-                                plugin_entry["manufacturer"] = result["manufacturer"]
-                            elif vendor:
-                                plugin_entry["manufacturer"] = vendor
-                            
-                            # Add metadata if available
-                            if result.get("metadata"):
-                                plugin_entry["metadata"] = result["metadata"]
-                            
-                            self.plugins[name] = plugin_entry
-                            completed += 1
-                        else:
-                            # Store failed plugin info
-                            self.failed_plugins[name] = {
-                                "path": str(path),
-                                "type": plugin_type,
-                                "error": result.get("error", "Unknown error")
-                            }
-                            failed += 1
-                            
+                        future.result()  # We don't need the result, just check for exceptions
                     except Exception as e:
-                        self.failed_plugins[name] = {
-                            "path": str(path),
-                            "type": plugin_type,
-                            "error": str(e)
-                        }
-                        failed += 1
-                    
-                    # Update progress
-                    progress.update(
-                        main_task, 
-                        advance=1,
-                        description=f"[cyan]Scanning plugins [green]{completed} OK [red]{failed} failed"
-                    )
-                    
-                    # Save periodically
-                    if (completed + failed) % 10 == 0:
-                        self.save_plugins()
-        
-        # Final save
-        self.save_plugins()
-        
-        # Report results
-        console.print(f"\n[green]✓[/green] Successfully scanned {completed} plugins")
-        if failed > 0:
-            console.print(f"[red]✗[/red] Failed to scan {failed} plugins")
-            console.print(f"   See {get_cache_path('failed_plugins')} for details")
-    
-    def scan(self, extra_folders=None):
-        """Scan all plugins with complete process isolation."""
-        # Collect all plugin tasks
-        plugin_tasks = []
-        
-        # VST3 plugins
-        vst3_plugins = self._find_vst3_plugins(extra_folders=extra_folders)
-        if self.verbose and vst3_plugins:
-            console.print(f"[dim]Getting names for {len(vst3_plugins)} VST3 plugins...[/dim]")
-        
-        for plugin_path in vst3_plugins:
-            try:
-                # Get plugin names without loading the plugin
-                # Use repr to safely pass the path
-                path_str = str(plugin_path)
-                code = f"import pedalboard; names = pedalboard.VST3Plugin.get_plugin_names_for_file({repr(path_str)}); print('\\n'.join(names))"
-                
-                if self.verbose:
-                    logger.debug(f"Getting plugin names for: {plugin_path}")
-                
-                with subprocess.Popen(
-                    [sys.executable, "-c", code],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE if self.verbose else subprocess.DEVNULL,
-                    text=True
-                ) as proc:
-                    stdout, stderr = proc.communicate(timeout=5)
-                    if stdout:
-                        names = [n for n in stdout.strip().split('\n') if n]
-                        if self.verbose:
-                            console.print(f"[dim]  • {plugin_path.stem}: {len(names)} plugin(s)[/dim]")
-                            if stderr:
-                                logger.debug(f"stderr for {plugin_path}: {stderr}")
-                        for plugin_name in names:
-                            plugin_tasks.append((str(plugin_path), plugin_name, "vst3", None))
-            except Exception as e:
-                # If we can't get plugin names, try with the filename
-                plugin_name = plugin_path.stem
-                plugin_tasks.append((str(plugin_path), plugin_name, "vst3", None))
-                if self.verbose:
-                    console.print(f"[yellow]  • Using filename for {plugin_path}: {e}[/yellow]")
-        
-        # AU plugins (macOS only)
-        if platform.system() == "Darwin":
-            au_plugins = self._find_aufx_plugins()
-            if self.verbose and au_plugins:
-                console.print(f"[dim]Getting names for {len(au_plugins)} Audio Unit plugins...[/dim]")
-            
-            for plugin_path, vendor_name, plugin_name in au_plugins:
-                try:
-                    # Get plugin names without loading the plugin
-                    # Use repr to safely pass the path
-                    path_str = str(plugin_path)
-                    code = f"import pedalboard; names = pedalboard.AudioUnitPlugin.get_plugin_names_for_file({repr(path_str)}); print('\\n'.join(names))"
-                    
-                    if self.verbose:
-                        logger.debug(f"Getting AU plugin names for: {plugin_path}")
-                    
-                    with subprocess.Popen(
-                        [sys.executable, "-c", code],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE if self.verbose else subprocess.DEVNULL,
-                        text=True
-                    ) as proc:
-                        stdout, stderr = proc.communicate(timeout=5)
-                        if stdout:
-                            names = [n for n in stdout.strip().split('\n') if n]
-                            if self.verbose:
-                                console.print(f"[dim]  • {plugin_name} by {vendor_name}: {len(names)} plugin(s)[/dim]")
-                                if stderr:
-                                    logger.debug(f"stderr for {plugin_path}: {stderr}")
-                            for name in names:
-                                plugin_tasks.append((str(plugin_path), name, "aufx", vendor_name))
-                except Exception as e:
-                    # Fallback to plugin name from auval
-                    plugin_tasks.append((str(plugin_path), plugin_name, "aufx", vendor_name))
-                    if self.verbose:
-                        console.print(f"[yellow]  • Using auval name for {plugin_name}: {e}[/yellow]")
-        
-        # Scan in parallel with process isolation
-        self.scan_plugins_parallel(plugin_tasks)
-    
-    def rescan(self, extra_folders=None):
-        """Clear cache and rescan all plugins."""
-        self.plugins = {}
-        self.failed_plugins = {}
-        self.scan(extra_folders=extra_folders)
-    
-    def update(self, extra_folders=None):
-        """Update with only new plugins."""
-        console.print("\n[cyan]🔍 Scanning for new plugins...[/cyan]")
-        
-        if not self.plugins_path.exists():
-            self.rescan(extra_folders=extra_folders)
+                        logger.error(f"Error processing {name}: {e}")
+                    progress.update(scan_task, advance=1)
+
+    def _commit_journal(self):
+        """Commit successful results from the journal to the main cache."""
+        console.print("\n[bold cyan]Finalizing scan and updating cache...[/bold cyan]")
+        successful_entries = self.journal.get_all_successful()
+
+        if not successful_entries:
+            console.print("[yellow]No new successful scans to commit.[/yellow]")
+            self.journal.delete_journal()
             return
-        
-        self.plugins = load_json_file(self.plugins_path)
-        existing_count = len(self.plugins)
-        
-        # Scan for new plugins
-        self.scan(extra_folders=extra_folders)
-        
-        new_count = len(self.plugins) - existing_count
-        if new_count > 0:
-            console.print(f"[green]✓[/green] Found {new_count} new plugins")
-        else:
-            console.print("[yellow]No new plugins found[/yellow]")
+
+        try:
+            self.cache_backend.add_plugins(
+                [entry.result for entry in successful_entries]
+            )
+            summary = self.journal.get_summary()
+            console.print(
+                f"[bold green]Scan complete![/bold green] "
+                f"Successful: {summary.get('success', 0)}, "
+                f"Failed: {summary.get('failed', 0)}, "
+                f"Timed Out: {summary.get('timeout', 0)}"
+            )
+
+            # On success, delete the journal
+            self.journal.delete_journal()
+
+        except Exception as e:
+            console.print(f"[bold red]Error committing to cache: {e}[/bold red]")
+            console.print("Journal file has been kept for inspection.")
+
+    def _get_vst3_folders(self, extra_folders=None) -> List[Path]:
+        os_name = platform.system()
+        folders = []
+        if os_name == "Windows":
+            folders.extend([
+                Path(os.getenv("ProgramFiles", "") + r"\Common Files\VST3"),
+                Path(os.getenv("ProgramFiles(x86)", "") + r"\Common Files\VST3"),
+            ])
+        elif os_name == "Darwin":
+            folders.extend([
+                Path("~/Library/Audio/Plug-Ins/VST3").expanduser(),
+                Path("/Library/Audio/Plug-Ins/VST3"),
+            ])
+        elif os_name == "Linux":
+            folders.extend([
+                Path("~/.vst3").expanduser(),
+                Path("/usr/lib/vst3"),
+                Path("/usr/local/lib/vst3"),
+            ])
+        if extra_folders:
+            folders.extend(Path(p) for p in extra_folders)
+        return [folder for folder in folders if folder.exists()]

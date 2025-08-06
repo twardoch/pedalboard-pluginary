@@ -1,3 +1,6 @@
+# this_file: src/pedalboard_pluginary/data.py
+from __future__ import annotations
+
 import json
 import os
 import shutil
@@ -15,7 +18,8 @@ def get_cache_path(cache_name):
         cache_folder = Path(os.getenv("APPDATA")) / APP_NAME
     else:
         cache_folder = Path.home() / "Library" / "Application Support" / APP_NAME
-    return cache_folder / f"{cache_name}.json"
+    # Don't append .json anymore - let the caller specify the full filename
+    return cache_folder / cache_name
 
 
 def load_json_file(file_path):
