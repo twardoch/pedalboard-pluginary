@@ -73,17 +73,40 @@ class ScanJournal:
 
     def __init__(self, journal_path: Path):
         self.journal_path = journal_path
-        self._local = threading.local()
+        # Ensure directory exists before creating any connections
+        self.journal_path.parent.mkdir(parents=True, exist_ok=True)
+        # Use a single connection without thread-local storage
+        self._conn = None
         self._create_schema()
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Gets a thread-local database connection."""
-        if not hasattr(self._local, "connection"):
-            self._local.connection = sqlite3.connect(
-                self.journal_path, check_same_thread=False
+        """Gets the database connection, creating if needed."""
+        if self._conn is None:
+            self._conn = sqlite3.connect(
+                str(self.journal_path), check_same_thread=False
             )
-            self._local.connection.row_factory = sqlite3.Row
-        return self._local.connection
+            self._conn.row_factory = sqlite3.Row
+            # Ensure schema exists for this connection
+            self._ensure_schema_for_connection(self._conn)
+        return self._conn
+    
+    def _ensure_schema_for_connection(self, conn):
+        """Ensure the schema exists for a given connection."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS journal (
+                plugin_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                result_json TEXT,
+                timestamp REAL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_status ON journal (status)
+            """
+        )
 
     def _create_schema(self):
         """Creates the necessary tables and indexes if they don't exist."""
@@ -109,11 +132,12 @@ class ScanJournal:
         Adds a list of plugin paths to the journal with 'pending' status,
         ignoring any that already exist.
         """
-        with self._get_connection() as conn:
-            conn.executemany(
-                "INSERT OR IGNORE INTO journal (plugin_id, status) VALUES (?, 'pending')",
-                [(path,) for path in plugin_paths],
-            )
+        conn = self._get_connection()
+        conn.executemany(
+            "INSERT OR IGNORE INTO journal (plugin_id, status) VALUES (?, 'pending')",
+            [(path,) for path in plugin_paths],
+        )
+        conn.commit()
 
     def get_pending_plugins(self) -> set[PluginId]:
         """Returns a set of all plugin paths marked as 'pending'."""
@@ -133,15 +157,16 @@ class ScanJournal:
         result_json = (
             serialize_plugin_info(result) if result and status == "success" else None
         )
-        with self._get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE journal
-                SET status = ?, result_json = ?, timestamp = ?
-                WHERE plugin_id = ?
-                """,
-                (status, result_json, time.time(), plugin_id),
-            )
+        conn = self._get_connection()
+        conn.execute(
+            """
+            UPDATE journal
+            SET status = ?, result_json = ?, timestamp = ?
+            WHERE plugin_id = ?
+            """,
+            (status, result_json, time.time(), plugin_id),
+        )
+        conn.commit()
 
     def get_all_successful(self) -> list[JournalEntry]:
         """Retrieves all successful scan entries from the journal."""
@@ -186,8 +211,9 @@ class ScanJournal:
 
     def close(self):
         """Closes the database connection."""
-        if hasattr(self._local, "connection"):
-            self._local.connection.close()
+        if self._conn:
+            self._conn.close()
+            self._conn = None
 
 def run_scan_single(
     plugin_path: str,
@@ -242,8 +268,7 @@ class IsolatedPedalboardScanner:
 
     def __init__(self, max_workers: Optional[int] = None, timeout: int = 30, verbose: bool = False, cache_backend: Optional[Any] = None, journal_path: Optional[Path] = None):
         self.cache_backend = cache_backend or SQLiteCacheBackend(db_path=get_cache_path("plugins.db"))
-        self.journal_path = self.cache_backend.db_path.parent / "scan_journal.db"
-        self.journal_path = get_cache_path("scan_journal.db")
+        self.journal_path = journal_path or get_cache_path("scan_journal.db")
         self.journal = ScanJournal(self.journal_path)
         self.max_workers = max_workers or min(mp.cpu_count(), 8)
         self.timeout = timeout
@@ -296,24 +321,51 @@ class IsolatedPedalboardScanner:
         return plugin_tasks
 
     def scan(self, extra_folders: Optional[List[str]] = None, rescan: bool = False):
-        self.journal = ScanJournal(self.journal_path)
         """Scan all plugins with journaling and process isolation."""
         if rescan:
             console.print("[bold yellow]Clearing cache and starting fresh scan...[/bold yellow]")
             self.cache_backend.clear()
             self.journal.delete_journal()
-
-        is_resumed_scan = self.journal_path.exists()
-        if is_resumed_scan:
-            console.print("[bold green]Resuming previous scan...[/bold green]")
+            # Recreate journal after deletion
+            self.journal = ScanJournal(self.journal_path)
+            is_resumed_scan = False  # Fresh scan, not a resume
         else:
-            console.print("[bold cyan]Starting new plugin scan...[/bold cyan]")
+            is_resumed_scan = self.journal_path.exists()
+            if is_resumed_scan:
+                console.print("[bold green]Resuming previous scan...[/bold green]")
+            else:
+                console.print("[bold cyan]Starting new plugin scan...[/bold cyan]")
 
         # 1. Discover all plugins
         all_plugins = self._find_plugins_to_scan(extra_folders)
+        
+        # 2. Filter out plugins that already exist in cache (unless rescanning)
+        if not rescan:
+            try:
+                # Get all existing plugin paths from cache (more efficient method)
+                existing_plugins = self.cache_backend.get_cached_paths()
+                
+                # Filter out existing plugins
+                new_plugins = {task for task in all_plugins if task[0] not in existing_plugins}
+                
+                if not new_plugins and not is_resumed_scan:
+                    total_cached = len(existing_plugins)
+                    console.print(f"[green]All {total_cached} plugins are already cached. Use --rescan to force re-scanning.[/green]")
+                    return
+                
+                # Update all_plugins to only include new ones
+                all_plugins = new_plugins
+                
+                if existing_plugins:
+                    console.print(f"[cyan]Found {len(existing_plugins)} cached plugins, scanning {len(all_plugins)} new plugins...[/cyan]")
+            except Exception as e:
+                logger.debug(f"Could not load existing plugins from cache: {e}")
+                # Continue with all plugins if cache check fails
+        
+        # 3. Add to journal for tracking
         self.journal.add_pending({path for path, _, _ in all_plugins})
 
-        # 2. Get the list of plugins that still need scanning
+        # 4. Get the list of plugins that still need scanning
         plugins_to_scan = self.journal.get_pending_plugins()
         tasks_to_submit = [
             task for task in all_plugins if task[0] in plugins_to_scan
@@ -322,10 +374,10 @@ class IsolatedPedalboardScanner:
         if not tasks_to_submit:
             console.print("No new plugins to scan.")
         else:
-            # 3. Scan in parallel
+            # 5. Scan in parallel
             self._execute_scan(tasks_to_submit)
 
-        # 4. Commit results to main cache
+        # 6. Commit results to main cache
         self._commit_journal()
 
     def _execute_scan(self, tasks: List[Tuple[str, str, str]]):

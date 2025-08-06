@@ -1,46 +1,173 @@
-# Pedalboard Pluginary - Essential Improvements Plan
+# Pedalboard Pluginary - Development Plan
 
 ## Overview
 
-The failsafe scanning architecture has been fully implemented and tested, providing a robust and resumable scanning process. The codebase has been significantly cleaned up and streamlined, with all deprecated code removed and modules properly consolidated.
+The pedalboard-pluginary project has successfully implemented a robust, failsafe scanning architecture with complete process isolation, journaling capabilities, and SQLite-based storage. The system reliably scans audio plugins (VST3, AU) with crash recovery, resume functionality, and efficient data storage.
 
-## Phase 1: Solidify Failsafe Scanning Architecture ✅ COMPLETED (2025-08-05)
+## Current Architecture (Completed)
 
-### 1.1. Comprehensive Integration Testing
-**Goal**: Ensure the new journaling and resumable scanning architecture is flawless under various failure conditions.
-**Actions**:
-- **Simulate Worker Crashes**: Write an integration test where the `scan_single.py` process is abruptly terminated (e.g., using `os.kill`). Verify that the main scanner correctly marks the plugin as `failed` or `timeout` in the journal and that the scan can be resumed.
-- **Simulate Main Process Crash**: Write a test that kills the main `IsolatedPedalboardScanner` process mid-scan. On re-running the scan, verify that it correctly resumes from the journal and only processes pending plugins.
-- **Test Atomic Commit**: Write a test to simulate a crash *during* the commit phase (after the journal is read but before the main cache is written). Verify that the main cache remains untouched and the journal is preserved, allowing the commit to be re-attempted on the next run.
-- **Test Edge Cases**: Test with an empty journal, a journal with only failed plugins, and a journal from a fully completed but uncommitted scan.
+### Core System Components
+- **Process Isolation**: Each plugin scanned in separate subprocess via `scan_single.py`
+- **Journaling**: SQLite-based journal tracks scan progress and enables resume after crashes
+- **Primary Storage**: SQLite database with full-text search and indexing
+- **Atomic Commits**: Two-phase commit ensures cache consistency
+- **Parallel Processing**: ThreadPoolExecutor for optimal performance
+- **Progress Tracking**: Rich console UI with real-time scan progress
 
-## Phase 2: Code Organization & Cleanup ✅ COMPLETED (2025-08-05)
+### Key Modules
+- `scanner_isolated.py`: Main scanner orchestrator with ScanJournal integration
+- `scan_single.py`: Standalone CLI for scanning individual plugins
+- `cache/sqlite_backend.py`: SQLite cache backend with FTS5 search
+- Rich CLI interface with commands: scan, update, list, info, json, yaml
 
-### 2.1. Module Consolidation
-**Goal**: Reduce complexity and improve maintainability by merging related modules.
-**Actions**:
-- **Merge `scanner_isolated.py` and `journal.py`**: The `ScanJournal` is tightly coupled to the `IsolatedPedalboardScanner`. Merge the `ScanJournal` class into the `scanner_isolated.py` module to create a single, self-contained, and cohesive scanning unit.
-- **Consolidate Cache Backends**: The `cache` sub-package can be simplified. The `SQLiteCacheBackend` is now the primary backend. The `json_backend.py` and `migration.py` can be deprecated or moved to a `legacy` sub-folder if backward compatibility is desired, otherwise removed.
-- **Merge `json_utils.py` into `serialization.py`**: The `json_utils.py` was a temporary fix for a circular import. Now that the code is being reorganized, these functions can be moved back into `serialization.py`.
+### Recent Achievements (2025-08-06)
+- Successfully migrated to SQLite as sole storage backend
+- Fixed all critical scanner and journal issues
+- Achieved successful scanning of 289 plugins
+- JSON/YAML export working from SQLite
+- Eliminated dependency on JSON file storage
 
-### 2.2. Remove Deprecated Code
-**Goal**: Eliminate all obsolete code to create a clean and modern codebase.
-**Actions**:
-- **Remove `BaseScanner` and `AsyncScanner`**: The `IsolatedPedalboardScanner` is now the sole scanning implementation. The `base_scanner.py` and `async_scanner.py` modules, along with the `BaseScanner` class and `AsyncScannerMixin`, are no longer needed.
-- **Remove Old Protocols**: The `protocols.py` file may contain protocols that are no longer relevant with the simplified architecture. Review and remove any that are not in use.
-- **Clean up `__main__.py`**: The CLI is now based on `click`. Remove any remnants of the old `fire`-based CLI.
+## Next Development Phases
 
-### 2.3. Optimize Imports and Structure
-**Goal**: Ensure a clean and consistent import structure across the project.
-**Actions**:
-- **Standardize Imports**: Use a consistent import order (standard library, third-party, first-party) across all modules.
-- **Use `__future__.annotations`**: Ensure all files have `from __future__ import annotations`.
-- **Refactor `data.py`**: This module contains a mix of functions. Refactor it to be more focused on data path management.
+### Phase 3: Performance & Scalability
+**Goal**: Optimize for large plugin collections (1000+ plugins)
+**Timeline**: 1-2 weeks
 
-## Next Steps
+**Tasks**:
+1. Benchmark scan performance with varying collection sizes
+2. Implement batch journal operations for better SQLite performance
+3. Add connection pooling for concurrent database access
+4. Dynamic worker pool sizing based on system resources
+5. Adaptive timeout based on plugin complexity
+6. Plugin scan retry mechanism for transient failures
 
-1.  **Immediate**: Begin Phase 1: Comprehensive Integration Testing.
-2.  **Week 1**: Complete all integration tests for the failsafe scanning architecture.
-3.  **Week 2**: Begin Phase 2: Code Organization & Cleanup.
-4.  **Week 3**: Complete the module consolidation and remove all deprecated code.
-5.  **Week 4**: Finalize the import optimization and refactor the `data.py` module.
+**Success Criteria**:
+- Scan 1000 plugins in under 5 minutes
+- Handle collections of 5000+ plugins efficiently
+- Reduce timeout failures by 50%
+
+### Phase 4: Documentation & Developer Experience
+**Goal**: Comprehensive documentation for users and contributors
+**Timeline**: 1 week
+
+**Tasks**:
+1. Update README with complete architecture overview
+2. Document SQLite storage design and benefits
+3. Create user guide with CLI examples
+4. Write API documentation for scanner modules
+5. Add troubleshooting guide for common issues
+6. Document crash recovery and resume features
+
+**Deliverables**:
+- Complete user documentation
+- Developer API reference
+- Architecture decision records (ADRs)
+- Contributing guidelines
+
+### Phase 5: Cross-Platform Support
+**Goal**: Ensure reliability on Windows, macOS, and Linux
+**Timeline**: 2 weeks
+
+**Tasks**:
+1. Test VST3 scanning on all platforms
+2. Add Linux LV2 plugin support
+3. Windows-specific path handling improvements
+4. Platform-specific binary builds
+5. CI/CD matrix for all platforms
+
+**Success Criteria**:
+- 95% plugin compatibility across platforms
+- Zero platform-specific critical bugs
+- Automated testing on all platforms
+
+### Phase 6: Advanced Features
+**Goal**: Enhanced plugin management capabilities
+**Timeline**: 3-4 weeks
+
+**Feature Set 1: Search & Organization**
+- Full-text search using SQLite FTS5
+- Plugin categorization (effects, instruments, etc.)
+- User-defined tags and collections
+- Smart filters and saved searches
+
+**Feature Set 2: Preset Management**
+- Extract and store plugin presets
+- Preset backup and versioning
+- Cross-plugin preset conversion
+- Preset sharing format
+
+**Feature Set 3: DAW Integration**
+- Export to Ableton Live format
+- Export to Logic Pro format
+- Export to Reaper format
+- Universal plugin manifest format
+
+**Feature Set 4: Web Interface**
+- REST API for plugin database
+- React-based web UI
+- Real-time plugin browser
+- Remote scanning capabilities
+- Multi-user support
+
+## Technical Debt Reduction
+
+### Immediate (This Week)
+1. Remove deprecated scanner modules (scanner_clean.py, etc.)
+2. Clean up `json_backend.py` and `migration.py`
+3. Refactor `data.py` for clarity
+4. Improve error messages throughout
+
+### Short-term (Next 2 Weeks)
+1. Add comprehensive logging framework
+2. Implement proper retry decorators
+3. Create plugin validation framework
+4. Standardize exception handling
+
+### Long-term (Next Month)
+1. Plugin compatibility database
+2. Automated plugin testing suite
+3. Performance monitoring dashboard
+4. Usage analytics (opt-in)
+
+## Success Metrics
+
+### Performance
+- **Scan Speed**: 1000 plugins < 5 minutes
+- **Memory Usage**: < 500MB for 5000 plugins
+- **Database Size**: < 100MB for 5000 plugins
+- **Query Speed**: < 100ms for searches
+
+### Reliability
+- **Scan Success Rate**: > 99.9%
+- **Crash Recovery**: 100% data preservation
+- **Resume Success**: 100% continuation
+- **Data Integrity**: Zero corruption incidents
+
+### Usability
+- **Setup Time**: < 2 minutes
+- **Learning Curve**: < 10 minutes to productivity
+- **Documentation Coverage**: 100% of public APIs
+- **User Satisfaction**: > 90% positive feedback
+
+## Risk Management
+
+### Technical Risks
+1. **Plugin Compatibility**: Some plugins may not load with pedalboard
+   - *Mitigation*: Maintain compatibility database, provide workarounds
+
+2. **Performance Degradation**: Large collections may slow down
+   - *Mitigation*: Implement pagination, lazy loading, caching strategies
+
+3. **Cross-Platform Issues**: Different behavior across OSes
+   - *Mitigation*: Extensive testing, platform-specific code paths
+
+### Project Risks
+1. **Scope Creep**: Feature requests beyond core functionality
+   - *Mitigation*: Clear roadmap, feature prioritization framework
+
+2. **Maintenance Burden**: Growing codebase complexity
+   - *Mitigation*: Modular architecture, comprehensive testing
+
+## Conclusion
+
+The project has achieved a solid foundation with reliable scanning and storage. The focus now shifts to performance optimization, documentation, and advanced features that will make pedalboard-pluginary the definitive tool for audio plugin management.

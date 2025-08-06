@@ -4,13 +4,16 @@ from __future__ import annotations
 import sqlite3
 import json
 import time
-from typing import Dict, Optional, Iterator, List
+import logging
+from typing import Dict, Optional, Iterator, List, Set, Any
 from pathlib import Path
 
 from ..models import PluginInfo
 from ..protocols import CacheBackend
 from ..serialization import PluginSerializer
 from ..exceptions import CacheError
+
+logger = logging.getLogger(__name__)
 
 
 class SQLiteCacheBackend(CacheBackend):
@@ -149,6 +152,45 @@ class SQLiteCacheBackend(CacheBackend):
         except sqlite3.Error as e:
             raise CacheError(f"Failed to save plugins to SQLite cache: {e}")
     
+    def add_plugins(self, plugins: List) -> None:
+        """Add multiple plugins to cache without clearing existing data.
+        
+        Args:
+            plugins: List of PluginInfo objects or dictionaries to add to cache.
+        """
+        if not plugins:
+            return
+            
+        try:
+            with self._connect() as conn:
+                current_time = time.time()
+                
+                for plugin_data in plugins:
+                    # Convert dict to PluginInfo if needed
+                    if isinstance(plugin_data, dict):
+                        plugin = PluginSerializer.dict_to_plugin(plugin_data)
+                        if plugin is None:
+                            continue  # Skip invalid plugin data
+                    else:
+                        plugin = plugin_data
+                    
+                    # Generate plugin ID from path
+                    plugin_id = str(plugin.path)
+                    
+                    # Check if plugin exists
+                    cursor = conn.execute("SELECT id FROM plugins WHERE id = ?", (plugin_id,))
+                    if cursor.fetchone():
+                        # Update existing plugin
+                        self._update_plugin(conn, plugin_id, plugin, current_time)
+                    else:
+                        # Insert new plugin
+                        self._insert_plugin(conn, plugin_id, plugin, current_time)
+                
+                conn.commit()
+                
+        except sqlite3.Error as e:
+            raise CacheError(f"Failed to add plugins to SQLite cache: {e}")
+    
     def update(self, plugin_id: str, plugin: PluginInfo) -> None:
         """Update a single plugin in cache."""
         try:
@@ -178,6 +220,47 @@ class SQLiteCacheBackend(CacheBackend):
                 
         except sqlite3.Error as e:
             raise CacheError(f"Failed to delete plugin {plugin_id} from SQLite cache: {e}")
+    
+    def get_all_plugins(self) -> List[Dict[str, Any]]:
+        """Get all plugins from cache as a list of dictionaries.
+        
+        Returns:
+            List of plugin dictionaries.
+        """
+        plugins = []
+        try:
+            with self._connect() as conn:
+                cursor = conn.execute("SELECT id, data FROM plugins")
+                for row in cursor:
+                    try:
+                        plugin_data = json.loads(row['data'])
+                        plugins.append(plugin_data)
+                    except (json.JSONDecodeError, KeyError, TypeError):
+                        continue
+        except sqlite3.Error as e:
+            raise CacheError(f"Failed to get all plugins from SQLite cache: {e}")
+        return plugins
+    
+    def get_cached_paths(self) -> Set[str]:
+        """Get all cached plugin paths for quick existence checking.
+        
+        Returns:
+            Set of plugin paths that are already cached.
+        """
+        paths = set()
+        try:
+            with self._connect() as conn:
+                cursor = conn.execute("SELECT data FROM plugins")
+                for row in cursor:
+                    try:
+                        plugin_data = json.loads(row['data'])
+                        if 'path' in plugin_data:
+                            paths.add(plugin_data['path'])
+                    except (json.JSONDecodeError, KeyError, TypeError):
+                        continue
+        except sqlite3.Error as e:
+            logger.warning(f"Failed to get cached paths: {e}")
+        return paths
     
     def clear(self) -> None:
         """Clear entire cache."""

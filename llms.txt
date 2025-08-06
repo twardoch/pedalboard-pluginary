@@ -4,7 +4,8 @@ Project Structure:
 │   ├── 📄 101.txt
 │   ├── 📄 102.txt
 │   ├── 📄 103.txt
-│   └── 📄 104.txt
+│   ├── 📄 104.txt
+│   └── 📄 201.txt
 ├── 📁 scripts
 │   ├── 📄 format.sh
 │   ├── 📄 release.sh
@@ -445,6 +446,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Changed (2025-08-06)
+- **SQLite as Primary Storage**: Fully migrated to SQLite as the sole storage backend
+  - Removed dependency on JSON file storage for plugin data
+  - SQLite now provides ACID guarantees and better performance
+  - JSON export/import now only used for data interchange
+  - Eliminated confusion between storage backends
+  - Cache backend now exclusively uses SQLite with full-text search
+
+### Fixed (2025-08-06)
+- **Critical Scanner Fixes**: Resolved major issues preventing plugin storage
+  - Fixed journal database connection issues (removed thread-local storage)
+  - Resolved SQLite "readonly database" errors with proper commit operations
+  - Fixed plugin ID consistency between scan_single.py and journal operations
+  - Corrected journal recreation after rescan to prevent crashes
+  - Fixed scanner to properly check SQLite for existing plugins
+  - Added missing SQLite backend methods (get_all_plugins, get_cached_paths)
+  - Successfully scanned and stored 289 plugins in SQLite database
+
+### Fixed (2025-08-06)
+- **Scanner Bug Fixes**: Fixed critical issues in isolated scanner architecture
+  - Fixed duplicate journal initialization in scanner_isolated.py 
+  - Removed redundant journal path assignment that was overwriting configured path
+  - Fixed plugin_id generation in scan_single.py to match expected format
+  - Updated parameter extraction to use correct SerializedParameter format
+  - Fixed metadata handling to align with SerializedPlugin model structure
+  - Corrected plugin_type field naming for consistency across the codebase
 
 ### Added (2025-08-05)
 - **Comprehensive Integration Tests**: Complete test suite for failsafe scanning architecture
@@ -1695,52 +1723,179 @@ Your project now has a complete, production-ready CI/CD pipeline with git-tag-ba
 <document index="14">
 <source>PLAN.md</source>
 <document_content>
-# Pedalboard Pluginary - Essential Improvements Plan
+# Pedalboard Pluginary - Development Plan
 
 ## Overview
 
-The failsafe scanning architecture has been fully implemented and tested, providing a robust and resumable scanning process. The codebase has been significantly cleaned up and streamlined, with all deprecated code removed and modules properly consolidated.
+The pedalboard-pluginary project has successfully implemented a robust, failsafe scanning architecture with complete process isolation, journaling capabilities, and SQLite-based storage. The system reliably scans audio plugins (VST3, AU) with crash recovery, resume functionality, and efficient data storage.
 
-## Phase 1: Solidify Failsafe Scanning Architecture ✅ COMPLETED (2025-08-05)
+## Current Architecture (Completed)
 
-### 1.1. Comprehensive Integration Testing
-**Goal**: Ensure the new journaling and resumable scanning architecture is flawless under various failure conditions.
-**Actions**:
-- **Simulate Worker Crashes**: Write an integration test where the `scan_single.py` process is abruptly terminated (e.g., using `os.kill`). Verify that the main scanner correctly marks the plugin as `failed` or `timeout` in the journal and that the scan can be resumed.
-- **Simulate Main Process Crash**: Write a test that kills the main `IsolatedPedalboardScanner` process mid-scan. On re-running the scan, verify that it correctly resumes from the journal and only processes pending plugins.
-- **Test Atomic Commit**: Write a test to simulate a crash *during* the commit phase (after the journal is read but before the main cache is written). Verify that the main cache remains untouched and the journal is preserved, allowing the commit to be re-attempted on the next run.
-- **Test Edge Cases**: Test with an empty journal, a journal with only failed plugins, and a journal from a fully completed but uncommitted scan.
+### Core System Components
+- **Process Isolation**: Each plugin scanned in separate subprocess via `scan_single.py`
+- **Journaling**: SQLite-based journal tracks scan progress and enables resume after crashes
+- **Primary Storage**: SQLite database with full-text search and indexing
+- **Atomic Commits**: Two-phase commit ensures cache consistency
+- **Parallel Processing**: ThreadPoolExecutor for optimal performance
+- **Progress Tracking**: Rich console UI with real-time scan progress
 
-## Phase 2: Code Organization & Cleanup ✅ COMPLETED (2025-08-05)
+### Key Modules
+- `scanner_isolated.py`: Main scanner orchestrator with ScanJournal integration
+- `scan_single.py`: Standalone CLI for scanning individual plugins
+- `cache/sqlite_backend.py`: SQLite cache backend with FTS5 search
+- Rich CLI interface with commands: scan, update, list, info, json, yaml
 
-### 2.1. Module Consolidation
-**Goal**: Reduce complexity and improve maintainability by merging related modules.
-**Actions**:
-- **Merge `scanner_isolated.py` and `journal.py`**: The `ScanJournal` is tightly coupled to the `IsolatedPedalboardScanner`. Merge the `ScanJournal` class into the `scanner_isolated.py` module to create a single, self-contained, and cohesive scanning unit.
-- **Consolidate Cache Backends**: The `cache` sub-package can be simplified. The `SQLiteCacheBackend` is now the primary backend. The `json_backend.py` and `migration.py` can be deprecated or moved to a `legacy` sub-folder if backward compatibility is desired, otherwise removed.
-- **Merge `json_utils.py` into `serialization.py`**: The `json_utils.py` was a temporary fix for a circular import. Now that the code is being reorganized, these functions can be moved back into `serialization.py`.
+### Recent Achievements (2025-08-06)
+- Successfully migrated to SQLite as sole storage backend
+- Fixed all critical scanner and journal issues
+- Achieved successful scanning of 289 plugins
+- JSON/YAML export working from SQLite
+- Eliminated dependency on JSON file storage
 
-### 2.2. Remove Deprecated Code
-**Goal**: Eliminate all obsolete code to create a clean and modern codebase.
-**Actions**:
-- **Remove `BaseScanner` and `AsyncScanner`**: The `IsolatedPedalboardScanner` is now the sole scanning implementation. The `base_scanner.py` and `async_scanner.py` modules, along with the `BaseScanner` class and `AsyncScannerMixin`, are no longer needed.
-- **Remove Old Protocols**: The `protocols.py` file may contain protocols that are no longer relevant with the simplified architecture. Review and remove any that are not in use.
-- **Clean up `__main__.py`**: The CLI is now based on `click`. Remove any remnants of the old `fire`-based CLI.
+## Next Development Phases
 
-### 2.3. Optimize Imports and Structure
-**Goal**: Ensure a clean and consistent import structure across the project.
-**Actions**:
-- **Standardize Imports**: Use a consistent import order (standard library, third-party, first-party) across all modules.
-- **Use `__future__.annotations`**: Ensure all files have `from __future__ import annotations`.
-- **Refactor `data.py`**: This module contains a mix of functions. Refactor it to be more focused on data path management.
+### Phase 3: Performance & Scalability
+**Goal**: Optimize for large plugin collections (1000+ plugins)
+**Timeline**: 1-2 weeks
 
-## Next Steps
+**Tasks**:
+1. Benchmark scan performance with varying collection sizes
+2. Implement batch journal operations for better SQLite performance
+3. Add connection pooling for concurrent database access
+4. Dynamic worker pool sizing based on system resources
+5. Adaptive timeout based on plugin complexity
+6. Plugin scan retry mechanism for transient failures
 
-1.  **Immediate**: Begin Phase 1: Comprehensive Integration Testing.
-2.  **Week 1**: Complete all integration tests for the failsafe scanning architecture.
-3.  **Week 2**: Begin Phase 2: Code Organization & Cleanup.
-4.  **Week 3**: Complete the module consolidation and remove all deprecated code.
-5.  **Week 4**: Finalize the import optimization and refactor the `data.py` module.
+**Success Criteria**:
+- Scan 1000 plugins in under 5 minutes
+- Handle collections of 5000+ plugins efficiently
+- Reduce timeout failures by 50%
+
+### Phase 4: Documentation & Developer Experience
+**Goal**: Comprehensive documentation for users and contributors
+**Timeline**: 1 week
+
+**Tasks**:
+1. Update README with complete architecture overview
+2. Document SQLite storage design and benefits
+3. Create user guide with CLI examples
+4. Write API documentation for scanner modules
+5. Add troubleshooting guide for common issues
+6. Document crash recovery and resume features
+
+**Deliverables**:
+- Complete user documentation
+- Developer API reference
+- Architecture decision records (ADRs)
+- Contributing guidelines
+
+### Phase 5: Cross-Platform Support
+**Goal**: Ensure reliability on Windows, macOS, and Linux
+**Timeline**: 2 weeks
+
+**Tasks**:
+1. Test VST3 scanning on all platforms
+2. Add Linux LV2 plugin support
+3. Windows-specific path handling improvements
+4. Platform-specific binary builds
+5. CI/CD matrix for all platforms
+
+**Success Criteria**:
+- 95% plugin compatibility across platforms
+- Zero platform-specific critical bugs
+- Automated testing on all platforms
+
+### Phase 6: Advanced Features
+**Goal**: Enhanced plugin management capabilities
+**Timeline**: 3-4 weeks
+
+**Feature Set 1: Search & Organization**
+- Full-text search using SQLite FTS5
+- Plugin categorization (effects, instruments, etc.)
+- User-defined tags and collections
+- Smart filters and saved searches
+
+**Feature Set 2: Preset Management**
+- Extract and store plugin presets
+- Preset backup and versioning
+- Cross-plugin preset conversion
+- Preset sharing format
+
+**Feature Set 3: DAW Integration**
+- Export to Ableton Live format
+- Export to Logic Pro format
+- Export to Reaper format
+- Universal plugin manifest format
+
+**Feature Set 4: Web Interface**
+- REST API for plugin database
+- React-based web UI
+- Real-time plugin browser
+- Remote scanning capabilities
+- Multi-user support
+
+## Technical Debt Reduction
+
+### Immediate (This Week)
+1. Remove deprecated scanner modules (scanner_clean.py, etc.)
+2. Clean up `json_backend.py` and `migration.py`
+3. Refactor `data.py` for clarity
+4. Improve error messages throughout
+
+### Short-term (Next 2 Weeks)
+1. Add comprehensive logging framework
+2. Implement proper retry decorators
+3. Create plugin validation framework
+4. Standardize exception handling
+
+### Long-term (Next Month)
+1. Plugin compatibility database
+2. Automated plugin testing suite
+3. Performance monitoring dashboard
+4. Usage analytics (opt-in)
+
+## Success Metrics
+
+### Performance
+- **Scan Speed**: 1000 plugins < 5 minutes
+- **Memory Usage**: < 500MB for 5000 plugins
+- **Database Size**: < 100MB for 5000 plugins
+- **Query Speed**: < 100ms for searches
+
+### Reliability
+- **Scan Success Rate**: > 99.9%
+- **Crash Recovery**: 100% data preservation
+- **Resume Success**: 100% continuation
+- **Data Integrity**: Zero corruption incidents
+
+### Usability
+- **Setup Time**: < 2 minutes
+- **Learning Curve**: < 10 minutes to productivity
+- **Documentation Coverage**: 100% of public APIs
+- **User Satisfaction**: > 90% positive feedback
+
+## Risk Management
+
+### Technical Risks
+1. **Plugin Compatibility**: Some plugins may not load with pedalboard
+   - *Mitigation*: Maintain compatibility database, provide workarounds
+
+2. **Performance Degradation**: Large collections may slow down
+   - *Mitigation*: Implement pagination, lazy loading, caching strategies
+
+3. **Cross-Platform Issues**: Different behavior across OSes
+   - *Mitigation*: Extensive testing, platform-specific code paths
+
+### Project Risks
+1. **Scope Creep**: Feature requests beyond core functionality
+   - *Mitigation*: Clear roadmap, feature prioritization framework
+
+2. **Maintenance Burden**: Growing codebase complexity
+   - *Mitigation*: Modular architecture, comprehensive testing
+
+## Conclusion
+
+The project has achieved a solid foundation with reliable scanning and storage. The focus now shifts to performance optimization, documentation, and advanced features that will make pedalboard-pluginary the definitive tool for audio plugin management.
 </document_content>
 </document>
 
@@ -2316,39 +2471,56 @@ _Pedalboard Pluginary_ is not affiliated with [Pedalboard](https://github.com/sp
 <document index="16">
 <source>TODO.md</source>
 <document_content>
-# Pedalboard Pluginary - Essential Improvements TODO
+# Pedalboard Pluginary - TODO
 
-## ✅ Phase 1: Solidify Failsafe Scanning Architecture - COMPLETED (2025-08-05)
+## Current Focus
 
-### Comprehensive Integration Testing
-- [x] Write integration test to simulate a worker process crash.
-- [x] Write integration test to simulate a main process crash and verify resume.
-- [x] Write integration test to simulate a crash during the commit phase.
-- [x] Write integration tests for edge cases (empty journal, all-failed journal).
+### Performance & Optimization
+- [ ] Performance benchmarking of scan operations with 1000+ plugins
+- [ ] Optimize journal database operations for large plugin collections
+- [ ] Implement adaptive timeout based on plugin complexity
+- [ ] Add plugin scan retry mechanism for transient failures
 
-## ✅ Phase 2: Code Organization & Cleanup - COMPLETED (2025-08-05)
+### Documentation
+- [ ] Update README.md with new isolated scanner architecture
+- [ ] Document journaling system and crash recovery features
+- [ ] Add API documentation for scanner_isolated module
+- [ ] Create user guide for CLI commands
+- [ ] Document SQLite storage architecture
 
-### Module Consolidation
-- [x] Merge the `ScanJournal` class into the `scanner_isolated.py` module.
-- [x] Merge the contents of `json_utils.py` into `serialization.py` and remove `json_utils.py`.
-
-### Remove Deprecated Code
-- [x] Remove `base_scanner.py` and `async_scanner.py`.
-- [x] Review and remove any unused protocols in `protocols.py`.
-- [x] Remove any remaining `fire`-based CLI code from `__main__.py`.
-
-### Optimize Imports and Structure
-- [x] Standardize import order across all modules.
-- [x] Ensure all files have `from __future__ import annotations`.
-
-## Next Steps
-
-- [ ] Full integration testing with real plugins
-- [ ] Performance benchmarking
-- [ ] Documentation updates
+### Code Quality
 - [ ] Refactor `data.py` to focus on data path management
-- [ ] Consider deprecating or removing `json_backend.py` and `migration.py` modules
+- [ ] Remove deprecated `json_backend.py` and `migration.py` modules
+- [ ] Add type hints to remaining untyped functions
+- [ ] Improve error messages and user feedback
+- [ ] Clean up unused scanner modules (scanner_clean.py, etc.)
 
+### Testing
+- [ ] Add unit tests for ScanJournal class
+- [ ] Create performance regression tests
+- [ ] Test cross-platform compatibility (Windows, Linux)
+- [ ] Add tests for edge cases in plugin parameter extraction
+- [ ] Test concurrent scanning with multiple workers
+
+### Features
+- [ ] Add plugin preset management functionality
+- [ ] Implement plugin categorization and tagging
+- [ ] Add export functionality for different DAW formats
+- [ ] Create web UI for plugin browser
+- [ ] Add plugin search with full-text capabilities
+
+## Completed (2025-08-06)
+
+- [x] Fixed scanner to use SQLite as primary storage
+- [x] Removed JSON storage dependencies
+- [x] Fixed journal database connection issues
+- [x] Resolved plugin ID consistency problems
+- [x] Successfully implemented SQLite-only storage (289 plugins tested)
+- [x] Full integration testing with real plugins
+
+## Completed (2025-08-05)
+
+See CHANGELOG.md for Phase 1 and Phase 2 completion details.
 </document_content>
 </document>
 
@@ -3791,6 +3963,23 @@ TypeError: SQLiteCacheBackend.__init__() missing 1 required positional argument:
 </document>
 
 <document index="22">
+<source>issues/201.txt</source>
+<document_content>
+
+## JSON output
+
+`python -m pedalboard_pluginary json` gives this structure: 
+```
+[{"id": "vst3/ABLM2", "name": "ABLM2", "path": "/Library/Audio/Plug-Ins/VST3/ABLM2.vst3", "type": "vst3", "manufacturer": null, ...
+```
+
+I want a dict, where the keys are the `id` fields and the values are dicts with the remaining params. 
+
+
+</document_content>
+</document>
+
+<document index="23">
 <source>publish.sh</source>
 <document_content>
 #!/usr/bin/env bash
@@ -3809,7 +3998,7 @@ uvx hatch publish
 </document_content>
 </document>
 
-<document index="23">
+<document index="24">
 <source>pyproject.toml</source>
 <document_content>
 [build-system]
@@ -3938,7 +4127,7 @@ include = [
 </document_content>
 </document>
 
-<document index="24">
+<document index="25">
 <source>scripts/format.sh</source>
 <document_content>
 #!/usr/bin/env bash
@@ -3993,7 +4182,7 @@ fi
 </document_content>
 </document>
 
-<document index="25">
+<document index="26">
 <source>scripts/release.sh</source>
 <document_content>
 #!/usr/bin/env bash
@@ -4122,7 +4311,7 @@ fi
 </document_content>
 </document>
 
-<document index="26">
+<document index="27">
 <source>scripts/test.sh</source>
 <document_content>
 #!/usr/bin/env bash
@@ -4258,7 +4447,7 @@ fi
 </document_content>
 </document>
 
-<document index="27">
+<document index="28">
 <source>src/pedalboard-stubs/__init__.pyi</source>
 <document_content>
 """Type stubs for pedalboard library."""
@@ -4429,7 +4618,8 @@ def backup_json_cache((json_path: Path, backup_suffix: str = ".backup")) -> Path
 import sqlite3
 import json
 import time
-from typing import Dict, Optional, Iterator, List
+import logging
+from typing import Dict, Optional, Iterator, List, Set, Any
 from pathlib import Path
 from ..models import PluginInfo
 from ..protocols import CacheBackend
@@ -4447,10 +4637,16 @@ class SQLiteCacheBackend(C, a, c, h, e, B, a, c, k, e, n, d):
         """Load all cached plugins."""
     def save((self, plugins: Dict[str, PluginInfo])) -> None:
         """Save plugins to cache."""
+    def add_plugins((self, plugins: List)) -> None:
+        """Add multiple plugins to cache without clearing existing data."""
     def update((self, plugin_id: str, plugin: PluginInfo)) -> None:
         """Update a single plugin in cache."""
     def delete((self, plugin_id: str)) -> None:
         """Remove a plugin from cache."""
+    def get_all_plugins((self)) -> List[Dict[str, Any]]:
+        """Get all plugins from cache as a list of dictionaries."""
+    def get_cached_paths((self)) -> Set[str]:
+        """Get all cached plugin paths for quick existence checking."""
     def clear((self)) -> None:
         """Clear entire cache."""
     def exists((self)) -> bool:
@@ -4480,11 +4676,20 @@ def load((self)) -> Dict[str, PluginInfo]:
 def save((self, plugins: Dict[str, PluginInfo])) -> None:
     """Save plugins to cache."""
 
+def add_plugins((self, plugins: List)) -> None:
+    """Add multiple plugins to cache without clearing existing data."""
+
 def update((self, plugin_id: str, plugin: PluginInfo)) -> None:
     """Update a single plugin in cache."""
 
 def delete((self, plugin_id: str)) -> None:
     """Remove a plugin from cache."""
+
+def get_all_plugins((self)) -> List[Dict[str, Any]]:
+    """Get all plugins from cache as a list of dictionaries."""
+
+def get_cached_paths((self)) -> Set[str]:
+    """Get all cached plugin paths for quick existence checking."""
 
 def clear((self)) -> None:
     """Clear entire cache."""
@@ -4835,7 +5040,7 @@ def exists((self)) -> bool:
     """Check if cache exists."""
 
 
-<document index="28">
+<document index="29">
 <source>src/pedalboard_pluginary/resources/default_ignores.json</source>
 <document_content>
 [
@@ -4955,7 +5160,9 @@ class ScanJournal:
     """ Manages a SQLite-based journal for resumable, transactional plugin scanning...."""
     def __init__((self, journal_path: Path)):
     def _get_connection((self)) -> sqlite3.Connection:
-        """Gets a thread-local database connection."""
+        """Gets the database connection, creating if needed."""
+    def _ensure_schema_for_connection((self, conn)):
+        """Ensure the schema exists for a given connection."""
     def _create_schema((self)):
         """Creates the necessary tables and indexes if they don't exist."""
     def add_pending((self, plugin_paths: set[PluginId])):
@@ -4999,7 +5206,10 @@ class IsolatedPedalboardScanner:
 def __init__((self, journal_path: Path)):
 
 def _get_connection((self)) -> sqlite3.Connection:
-    """Gets a thread-local database connection."""
+    """Gets the database connection, creating if needed."""
+
+def _ensure_schema_for_connection((self, conn)):
+    """Ensure the schema exists for a given connection."""
 
 def _create_schema((self)):
     """Creates the necessary tables and indexes if they don't exist."""
@@ -5868,7 +6078,7 @@ from pedalboard_pluginary.utils import ensure_folder
 def test_ensure_folder((tmp_path)):
 
 
-<document index="29">
+<document index="30">
 <source>tox.ini</source>
 <document_content>
 # Tox configuration file

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (2025-08-06)
+- **SQLite as Primary Storage**: Fully migrated to SQLite as the sole storage backend
+  - Removed dependency on JSON file storage for plugin data
+  - SQLite now provides ACID guarantees and better performance
+  - JSON export/import now only used for data interchange
+  - Eliminated confusion between storage backends
+  - Cache backend now exclusively uses SQLite with full-text search
+
+### Fixed (2025-08-06)
+- **Critical Scanner Fixes**: Resolved major issues preventing plugin storage
+  - Fixed journal database connection issues (removed thread-local storage)
+  - Resolved SQLite "readonly database" errors with proper commit operations
+  - Fixed plugin ID consistency between scan_single.py and journal operations
+  - Corrected journal recreation after rescan to prevent crashes
+  - Fixed scanner to properly check SQLite for existing plugins
+  - Added missing SQLite backend methods (get_all_plugins, get_cached_paths)
+  - Successfully scanned and stored 289 plugins in SQLite database
+
+### Fixed (2025-08-06)
+- **Scanner Bug Fixes**: Fixed critical issues in isolated scanner architecture
+  - Fixed duplicate journal initialization in scanner_isolated.py 
+  - Removed redundant journal path assignment that was overwriting configured path
+  - Fixed plugin_id generation in scan_single.py to match expected format
+  - Updated parameter extraction to use correct SerializedParameter format
+  - Fixed metadata handling to align with SerializedPlugin model structure
+  - Corrected plugin_type field naming for consistency across the codebase
+
 ### Added (2025-08-05)
 - **Comprehensive Integration Tests**: Complete test suite for failsafe scanning architecture
   - Worker process crash simulation tests  

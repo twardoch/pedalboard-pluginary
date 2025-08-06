@@ -1,0 +1,10 @@
+
+## JSON output
+
+`python -m pedalboard_pluginary json` gives this structure: 
+```
+[{"id": "vst3/ABLM2", "name": "ABLM2", "path": "/Library/Audio/Plug-Ins/VST3/ABLM2.vst3", "type": "vst3", "manufacturer": null, ...
+```
+
+I want a dict, where the keys are the `id` fields and the values are dicts with the remaining params. 
+

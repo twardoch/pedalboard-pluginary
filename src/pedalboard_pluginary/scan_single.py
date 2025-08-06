@@ -33,15 +33,26 @@ def scan_single_plugin(
 ):
     """Scan a single plugin and write the result to the journal."""
     journal = ScanJournal(Path(journal_path))
-    plugin_id = plugin_path
+    
+    # Use plugin_path as the journal ID consistently
+    journal_id = plugin_path
 
-    # Mark as scanning
-    journal.update_status(plugin_id, "scanning")
+    # Mark as scanning (note: may already be marked by parent process)
+    # Only update if not already scanning to avoid conflicts
+    pending = journal.get_pending_plugins()
+    if journal_id in pending:
+        journal.update_status(journal_id, "scanning")
 
+    # Generate the plugin data ID and filename
+    plugin_filename = Path(plugin_path).name
+    plugin_data_id = f"{plugin_type}/{Path(plugin_path).stem}"
+    
     result = {
+        "id": plugin_data_id,
         "path": plugin_path,
         "name": plugin_name,
-        "type": plugin_type,
+        "filename": plugin_filename,
+        "plugin_type": plugin_type,
     }
 
     # Save original stdout and stderr
@@ -61,18 +72,24 @@ def scan_single_plugin(
         # Load the plugin
         plugin = pedalboard.load_plugin(plugin_path, plugin_name=plugin_name)
 
-        # Extract parameters
-        params = {}
+        # Extract parameters in the expected format
+        parameters = {}
         if hasattr(plugin, 'parameters'):
             for key in plugin.parameters.keys():
                 try:
                     value = getattr(plugin, key)
                     if isinstance(value, (bool, int, float, str)):
-                        params[key] = value
+                        param_value = value
                     else:
-                        params[key] = str(value)
+                        param_value = str(value)
+                    # Store as SerializedParameter format
+                    parameters[key] = {
+                        "name": key,
+                        "value": param_value
+                    }
                 except Exception:
-                    params[key] = None
+                    # Skip parameters that can't be retrieved
+                    pass
 
         # Extract manufacturer
         manufacturer = None
@@ -82,7 +99,7 @@ def scan_single_plugin(
             except Exception:
                 pass
 
-        # Extract other metadata
+        # Extract other metadata (store separately, not part of core model)
         metadata = {}
         for attr in ['version', 'category', 'is_instrument']:
             if hasattr(plugin, attr):
@@ -92,17 +109,18 @@ def scan_single_plugin(
                     pass
 
         result.update({
-            "params": params,
+            "parameters": parameters,
             "manufacturer": manufacturer,
-            "metadata": metadata,
+            # metadata is not part of the expected SerializedPlugin format
+            # but we can keep it for future use if needed
         })
 
-        journal.update_status(plugin_id, "success", result)
+        journal.update_status(journal_id, "success", result)
 
     except Exception as e:
         # We can't know for sure if it's a timeout here, the parent process will handle that.
         # We'll mark it as a generic failure.
-        journal.update_status(plugin_id, "failed", {"error": str(e)})
+        journal.update_status(journal_id, "failed", {"error": str(e)})
 
     finally:
         # Restore original stdout and stderr
