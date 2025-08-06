@@ -5,7 +5,6 @@
 
 import os
 import sys
-import tempfile
 from contextlib import contextmanager
 
 # Store original stderr

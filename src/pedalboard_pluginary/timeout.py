@@ -6,7 +6,7 @@ import asyncio
 import concurrent.futures
 import functools
 import logging
-from typing import Any, Awaitable, Callable, TypeVar, Union
+from typing import Any, Awaitable, Callable, TypeVar
 
 from .constants import PLUGIN_LOAD_TIMEOUT
 

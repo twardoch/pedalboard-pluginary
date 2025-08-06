@@ -84,3 +84,4 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+external/

@@ -28,7 +28,6 @@ class PluginaryError(Exception):
 
 class ScannerError(PluginaryError):
     """Base exception for scanner-related errors."""
-    pass
 
 
 class PluginLoadError(ScannerError):
@@ -65,7 +64,6 @@ class PluginScanError(ScannerError):
 
 class CacheError(PluginaryError):
     """Base exception for cache-related errors."""
-    pass
 
 
 class CacheCorruptedError(CacheError):
@@ -119,7 +117,6 @@ class CacheWriteError(CacheError):
 
 class ConfigError(PluginaryError):
     """Base exception for configuration-related errors."""
-    pass
 
 
 class InvalidConfigError(ConfigError):

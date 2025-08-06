@@ -13,12 +13,9 @@ import multiprocessing as mp
 import os
 import platform
 import re
-import shutil
 import sqlite3
 import subprocess
 import sys
-import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -264,7 +261,7 @@ def run_scan_single(
 class IsolatedPedalboardScanner:
     """Scanner with complete process isolation and resumable journaling."""
 
-    RE_AUFX = re.compile(r"aufx\s+(\w+)\s+(\w+)\s+-\s+(.*?):\s+(.*?)\s+\((\d+)\)")
+    RE_AUFX = re.compile(r"aufx\s+(\w+)\s+(\w+)\s+-\s+(.*?):\s+(.*?)\s+\((file://.*?)\)")
 
     def __init__(self, max_workers: Optional[int] = None, timeout: int = 30, verbose: bool = False, cache_backend: Optional[Any] = None, journal_path: Optional[Path] = None):
         self.cache_backend = cache_backend or SQLiteCacheBackend(db_path=get_cache_path("plugins.db"))

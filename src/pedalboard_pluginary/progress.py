@@ -77,15 +77,12 @@ class NoOpProgress(ProgressReporter):
     
     def start(self, total: int, description: str = "") -> None:
         """Start progress tracking (no-op)."""
-        pass
     
     def update(self, amount: int = 1, message: Optional[str] = None) -> None:
         """Update progress (no-op)."""
-        pass
     
     def finish(self, message: Optional[str] = None) -> None:
         """Finish progress tracking (no-op)."""
-        pass
 
 
 class LogProgress(ProgressReporter):

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (2025-08-06)
+- **AU Plugin Scanning**: Fixed Audio Unit plugin discovery on macOS
+  - Corrected regex pattern in scanner_isolated.py to match auval output format
+  - Changed pattern from expecting numeric ID to file:// URL format
+  - AU plugins will now be properly discovered and scanned alongside VST3 plugins
+- **JSON Output Format**: Changed JSON export to output dict with plugin IDs as keys
+  - Modified json command in CLI to return dict structure instead of list
+  - Plugin IDs now serve as keys with remaining fields as values
+  - Improves data structure for programmatic access
+- **Manufacturer Extraction**: Fixed plugin manufacturer extraction in scan_single.py
+  - Changed from incorrect 'manufacturer' attribute to 'manufacturer_name'
+  - Aligns with pedalboard library's actual API (since v0.9.4)
+  - Enables proper vendor/manufacturer metadata extraction
+
 ### Changed (2025-08-06)
 - **SQLite as Primary Storage**: Fully migrated to SQLite as the sole storage backend
   - Removed dependency on JSON file storage for plugin data

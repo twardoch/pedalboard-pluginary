@@ -2,7 +2,6 @@
 
 import logging
 from pathlib import Path
-from typing import Dict
 
 from ..models import PluginInfo
 from .json_backend import JSONCacheBackend

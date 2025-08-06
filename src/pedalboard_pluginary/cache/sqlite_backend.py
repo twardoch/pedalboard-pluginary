@@ -5,7 +5,7 @@ import sqlite3
 import json
 import time
 import logging
-from typing import Dict, Optional, Iterator, List, Set, Any
+from typing import Dict, List, Set, Any
 from pathlib import Path
 
 from ..models import PluginInfo

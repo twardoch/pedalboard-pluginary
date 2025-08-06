@@ -3,8 +3,7 @@ Protocol definitions for plugin scanner implementations.
 """
 from __future__ import annotations
 
-from typing import Protocol, List, Optional, Dict, runtime_checkable
-from pathlib import Path
+from typing import Protocol, Optional, Dict, runtime_checkable
 
 from .models import PluginInfo
 

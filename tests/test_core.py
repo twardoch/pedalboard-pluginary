@@ -1,7 +1,6 @@
 # tests/test_core.py
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-from pathlib import Path
+from unittest.mock import Mock, patch
 import json
 
 from pedalboard_pluginary.core import PedalboardPluginary

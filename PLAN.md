@@ -1,31 +1,4 @@
-# Pedalboard Pluginary - Development Plan
 
-## Overview
-
-The pedalboard-pluginary project has successfully implemented a robust, failsafe scanning architecture with complete process isolation, journaling capabilities, and SQLite-based storage. The system reliably scans audio plugins (VST3, AU) with crash recovery, resume functionality, and efficient data storage.
-
-## Current Architecture (Completed)
-
-### Core System Components
-- **Process Isolation**: Each plugin scanned in separate subprocess via `scan_single.py`
-- **Journaling**: SQLite-based journal tracks scan progress and enables resume after crashes
-- **Primary Storage**: SQLite database with full-text search and indexing
-- **Atomic Commits**: Two-phase commit ensures cache consistency
-- **Parallel Processing**: ThreadPoolExecutor for optimal performance
-- **Progress Tracking**: Rich console UI with real-time scan progress
-
-### Key Modules
-- `scanner_isolated.py`: Main scanner orchestrator with ScanJournal integration
-- `scan_single.py`: Standalone CLI for scanning individual plugins
-- `cache/sqlite_backend.py`: SQLite cache backend with FTS5 search
-- Rich CLI interface with commands: scan, update, list, info, json, yaml
-
-### Recent Achievements (2025-08-06)
-- Successfully migrated to SQLite as sole storage backend
-- Fixed all critical scanner and journal issues
-- Achieved successful scanning of 289 plugins
-- JSON/YAML export working from SQLite
-- Eliminated dependency on JSON file storage
 
 ## Next Development Phases
 

@@ -6,13 +6,8 @@ Tests worker crashes, main process crashes, commit phase crashes, and edge cases
 """
 from __future__ import annotations
 
-import multiprocessing
-import os
-import signal
-import sqlite3
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path

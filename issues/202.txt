@@ -1,0 +1,60 @@
+# How to Extract Plugin Vendor/Manufacturer Information from Pedalboard
+
+## Summary
+The pedalboard library provides a `manufacturer_name` property on external plugin objects (VST3 and AudioUnit plugins) that can be used to extract the vendor/manufacturer information. This was introduced in pedalboard v0.9.4.
+
+## Implementation Details
+
+### 1. Pedalboard's Native Implementation
+Pedalboard exposes manufacturer information through the `manufacturer_name` property on both VST3Plugin and AudioUnitPlugin classes:
+- Property name: `manufacturer_name` 
+- Type: str
+- Availability: Since pedalboard v0.9.4
+
+The C++ implementation extracts this from the JUCE PluginDescription's `manufacturerName` field (pedalboard.txt lines 13248-13252, 13474-13478).
+
+### 2. Current pedalboard-pluginary Implementation
+The current implementation in `scan_single.py` (lines 94-100) attempts to extract manufacturer info by:
+1. Checking if the plugin object has a 'manufacturer' attribute
+2. Converting it to string if present
+3. Falling back to None if extraction fails
+
+**Issue:** The code is checking for `plugin.manufacturer` but should be checking for `plugin.manufacturer_name` based on pedalboard's actual API.
+
+### 3. Recommended Fix
+Update `src/pedalboard_pluginary/scan_single.py` line 96-98:
+
+Current (incorrect):
+```python
+if hasattr(plugin, 'manufacturer'):
+    try:
+        manufacturer = str(plugin.manufacturer)
+```
+
+Should be:
+```python
+if hasattr(plugin, 'manufacturer_name'):
+    try:
+        manufacturer = str(plugin.manufacturer_name)
+```
+
+### 4. Additional Metadata Available
+Besides manufacturer_name, pedalboard plugins also expose:
+- `descriptive_name` - A more descriptive name for the plugin
+- `category` - Plugin category (e.g., "Dynamics", "Reverbs")
+- `version` - Plugin version string
+- `is_instrument` - Boolean indicating if plugin is an instrument
+
+These are already being extracted in the metadata section of scan_single.py (lines 104-109).
+
+### 5. Data Flow
+1. Plugin scanner loads plugin using pedalboard's VST3Plugin or AudioUnitPlugin
+2. Accesses the `manufacturer_name` property
+3. Stores in the SerializedPlugin data structure
+4. Saves to SQLite cache with manufacturer field
+5. Can be queried/filtered using the --vendor CLI option
+
+## References
+- pedalboard_native.txt lines 2922-2924, 3616-3618: Python API documentation
+- pedalboard.txt lines 13248-13252, 13474-13478: C++ binding implementation
+- scan_single.py lines 94-100: Current extraction implementation

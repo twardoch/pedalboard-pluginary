@@ -1,1 +1,0 @@
-Improve stability and reliability of the scanning. Add an intermediate orchestration layer: the main code should not load the plugins, but just gather the data. Scanning should be done in separate processes, in a parallelized fashion. 

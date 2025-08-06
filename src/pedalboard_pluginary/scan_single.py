@@ -6,10 +6,10 @@ Standalone single-plugin scanner with journaling.
 This tool loads ONE plugin, writes the result to a journal, and exits.
 It is designed to be called by the main scanner process.
 """
+
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import os
 import warnings
@@ -18,12 +18,13 @@ from pathlib import Path
 
 # Suppress all warnings and output
 warnings.filterwarnings("ignore")
-os.environ['PYTHONWARNINGS'] = 'ignore'
+os.environ["PYTHONWARNINGS"] = "ignore"
 
 # Add the parent directory to the path to allow imports from the package
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pedalboard_pluginary.scanner_isolated import ScanJournal
+
 
 def scan_single_plugin(
     plugin_path: str,
@@ -33,7 +34,7 @@ def scan_single_plugin(
 ):
     """Scan a single plugin and write the result to the journal."""
     journal = ScanJournal(Path(journal_path))
-    
+
     # Use plugin_path as the journal ID consistently
     journal_id = plugin_path
 
@@ -46,7 +47,7 @@ def scan_single_plugin(
     # Generate the plugin data ID and filename
     plugin_filename = Path(plugin_path).name
     plugin_data_id = f"{plugin_type}/{Path(plugin_path).stem}"
-    
+
     result = {
         "id": plugin_data_id,
         "path": plugin_path,
@@ -74,7 +75,7 @@ def scan_single_plugin(
 
         # Extract parameters in the expected format
         parameters = {}
-        if hasattr(plugin, 'parameters'):
+        if hasattr(plugin, "parameters"):
             for key in plugin.parameters.keys():
                 try:
                     value = getattr(plugin, key)
@@ -83,37 +84,36 @@ def scan_single_plugin(
                     else:
                         param_value = str(value)
                     # Store as SerializedParameter format
-                    parameters[key] = {
-                        "name": key,
-                        "value": param_value
-                    }
+                    parameters[key] = {"name": key, "value": param_value}
                 except Exception:
                     # Skip parameters that can't be retrieved
                     pass
 
         # Extract manufacturer
         manufacturer = None
-        if hasattr(plugin, 'manufacturer'):
+        if hasattr(plugin, "manufacturer_name"):
             try:
-                manufacturer = str(plugin.manufacturer)
+                manufacturer = str(plugin.manufacturer_name)
             except Exception:
                 pass
 
         # Extract other metadata (store separately, not part of core model)
         metadata = {}
-        for attr in ['version', 'category', 'is_instrument']:
+        for attr in ["version", "category", "is_instrument"]:
             if hasattr(plugin, attr):
                 try:
                     metadata[attr] = str(getattr(plugin, attr))
                 except Exception:
                     pass
 
-        result.update({
-            "parameters": parameters,
-            "manufacturer": manufacturer,
-            # metadata is not part of the expected SerializedPlugin format
-            # but we can keep it for future use if needed
-        })
+        result.update(
+            {
+                "parameters": parameters,
+                "manufacturer": manufacturer,
+                # metadata is not part of the expected SerializedPlugin format
+                # but we can keep it for future use if needed
+            }
+        )
 
         journal.update_status(journal_id, "success", result)
 
@@ -136,15 +136,17 @@ def main():
     parser.add_argument("--plugin-path", required=True, help="Path to the plugin")
     parser.add_argument("--plugin-name", required=True, help="Name of the plugin")
     parser.add_argument("--plugin-type", required=True, help="Type of the plugin")
-    parser.add_argument("--journal-path", required=True, help="Path to the journal database")
-    
+    parser.add_argument(
+        "--journal-path", required=True, help="Path to the journal database"
+    )
+
     args = parser.parse_args()
-    
+
     scan_single_plugin(
         plugin_path=args.plugin_path,
         plugin_name=args.plugin_name,
         plugin_type=args.plugin_type,
-        journal_path=args.journal_path
+        journal_path=args.journal_path,
     )
 
 

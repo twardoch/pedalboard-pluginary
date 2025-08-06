@@ -4,7 +4,7 @@ import time
 import tempfile
 import pytest
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 from pedalboard_pluginary.cache.sqlite_backend import SQLiteCacheBackend
 from pedalboard_pluginary.cache.json_backend import JSONCacheBackend
