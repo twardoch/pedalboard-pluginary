@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 from .constants import APP_VERSION, CACHE_VERSION
 from .exceptions import CacheCorruptedError, CacheVersionError, CacheWriteError
 from .models import PluginInfo, PluginParameter
-from .types import (
+from .type_definitions import (
     CacheData,
     CacheMetadata,
     SerializedParameter,
