@@ -296,14 +296,39 @@ class IsolatedPedalboardScanner:
     ) -> set[tuple[str, str, str]]:
         """Find all VST3 and AU plugins and return a set of (path, name, type)."""
         plugin_tasks = set()
+        processed_stems = set()  # Track plugin names to avoid duplicates
 
-        # VST3
+        # VST3 - use rglob to recursively find plugins (supports yabridge)
         for folder in self._get_vst3_folders(extra_folders):
-            for plugin_path in folder.glob("*.vst3"):
-                if f"vst3/{plugin_path.stem}" not in self.ignores:
-                    # For VST3, we often have multiple plugins in one file.
-                    # We will treat the file path as the initial task.
+            for plugin_path in folder.rglob("*.vst3"):
+                # Skip if we've already processed a plugin with this name
+                if plugin_path.stem in processed_stems:
+                    if self.verbose:
+                        logger.debug(f"Skipping duplicate: {plugin_path}")
+                    continue
+                
+                # Skip files that are inside x86_64-win (these are Windows symlinks in yabridge)
+                if "x86_64-win" in plugin_path.parts:
+                    if self.verbose:
+                        logger.debug(f"Skipping Windows symlink: {plugin_path}")
+                    continue
+                
+                # Check ignores
+                if f"vst3/{plugin_path.stem}" in self.ignores:
+                    continue
+                
+                # If this is a .vst3 directory (yabridge or native bundle)
+                if plugin_path.is_dir():
                     plugin_tasks.add((str(plugin_path), plugin_path.stem, "vst3"))
+                    processed_stems.add(plugin_path.stem)
+                    if self.verbose:
+                        logger.debug(f"Found VST3 bundle: {plugin_path}")
+                # Regular VST3 file (standalone)
+                elif plugin_path.is_file():
+                    plugin_tasks.add((str(plugin_path), plugin_path.stem, "vst3"))
+                    processed_stems.add(plugin_path.stem)
+                    if self.verbose:
+                        logger.debug(f"Found VST3 file: {plugin_path}")
 
         # AU (macOS only)
         if platform.system() == "Darwin":

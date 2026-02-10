@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from importlib import resources
 
@@ -13,10 +14,17 @@ APP_NAME = "com.twardoch.pedalboard-pluginary"
 
 def get_cache_path(cache_name):
     """Get the path to a cache file."""
-    if os.name == "nt":
+    system_os = sys.platform
+    if os.name == "nt" or system_os == "win32":
         cache_folder = Path(os.getenv("APPDATA")) / APP_NAME
-    else:
+    elif os.name == "posix" or system_os == "linux":
+        cache_folder = Path.home() / ".config" / APP_NAME
+    elif os.name == "mac" or system_os == "darwin":
         cache_folder = Path.home() / "Library" / "Application Support" / APP_NAME
+    else:
+        raise ValueError(f"Unsupported OS: {os}")
+    if not os.path.exists(cache_folder):
+        os.makedirs(cache_folder, exist_ok=True)
     # Don't append .json anymore - let the caller specify the full filename
     return cache_folder / cache_name
 
