@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags-ignore: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint & type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ruff lint
+        uses: astral-sh/ruff-action@v3
+        with:
+          version: "latest"
+          args: "check --output-format=github src tests"
+
+      - name: Ruff format check
+        uses: astral-sh/ruff-action@v3
+        with:
+          version: "latest"
+          args: "format --check src tests"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      # Type-check against the repo's local pedalboard stub. We deliberately do
+      # NOT install pedalboard here: it drags in numpy, whose bundled stubs use
+      # 3.12-only syntax that trips mypy.
+      - name: Mypy
+        run: |
+          uv pip install --system mypy click rich pyyaml tqdm typing-extensions
+          mypy src/pedalboard_pluginary
+
+  test:
+    name: Test (py${{ matrix.python-version }})
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-suffix: ${{ matrix.python-version }}
+
+      - name: Install package and test deps
+        run: uv pip install --system -e ".[dev]"
+
+      # Plugin scanning is fully mocked in the suite, so CI runners need no
+      # real VST3/AU plugins installed.
+      - name: Run tests
+        run: >-
+          python -m pytest tests/
+          --cov=pedalboard_pluginary --cov-report=xml -q
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+
+  build:
+    name: Build distribution
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Build sdist and wheel
+        run: |
+          uv pip install --system build hatchling hatch-vcs
+          python -m build --outdir dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-files
+          path: dist/
+          retention-days: 5

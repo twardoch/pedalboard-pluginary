@@ -85,3 +85,14 @@ dist/
 build/
 *.egg-info/
 external/
+
+# Local virtualenvs and tooling scratch
+venv/
+.benchmarks/
+llms.txt
+uv.lock
+
+# Editor/assistant local config (not part of the package)
+.cursor/
+.cursorrules
+.giga/

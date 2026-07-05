@@ -1,13 +1,16 @@
+# this_file: src/pedalboard_pluginary/serialization.py
 """
 Unified serialization module for plugin data.
 """
+
 from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .constants import APP_VERSION, CACHE_VERSION
 from .exceptions import CacheCorruptedError, CacheVersionError, CacheWriteError
@@ -25,14 +28,15 @@ from .utils import ensure_folder
 logger = logging.getLogger(__name__)
 
 
-def serialize_plugin_info(data: dict[str, Any]) -> str:
+def serialize_plugin_info(data: Mapping[str, Any]) -> str:
     """Serializes plugin data to a JSON string."""
     return json.dumps(data)
 
 
 def deserialize_plugin_info(json_str: str) -> dict[str, Any]:
     """Deserializes a JSON string to plugin data."""
-    return json.loads(json_str)
+    result: dict[str, Any] = json.loads(json_str)
+    return result
 
 
 class PluginSerializer:
@@ -54,7 +58,7 @@ class PluginSerializer:
         }
 
     @staticmethod
-    def dict_to_parameter(data: Dict[str, Any]) -> Optional[PluginParameter]:
+    def dict_to_parameter(data: dict[str, Any]) -> PluginParameter | None:
         """Convert dictionary to PluginParameter with validation.
 
         Args:
@@ -83,7 +87,7 @@ class PluginSerializer:
             SerializedPlugin dictionary.
         """
         # Convert parameters
-        params_dict: Dict[str, SerializedParameter] = {}
+        params_dict: dict[str, SerializedParameter] = {}
         for param_name, param in plugin.parameters.items():
             params_dict[param_name] = PluginSerializer.parameter_to_dict(param)
 
@@ -101,7 +105,7 @@ class PluginSerializer:
         return result
 
     @staticmethod
-    def dict_to_plugin(data: Dict[str, Any]) -> Optional[PluginInfo]:
+    def dict_to_plugin(data: dict[str, Any]) -> PluginInfo | None:
         """Convert dictionary to PluginInfo with validation.
 
         Args:
@@ -115,7 +119,7 @@ class PluginSerializer:
             return None
 
         # Convert parameters
-        params: Dict[str, PluginParameter] = {}
+        params: dict[str, PluginParameter] = {}
         for param_name, param_data in data.get("parameters", {}).items():
             param = PluginSerializer.dict_to_parameter(param_data)
             if param:
@@ -152,7 +156,7 @@ class PluginSerializer:
         }
 
     @classmethod
-    def save_plugins(cls, plugins: Dict[str, PluginInfo], path: Path) -> None:
+    def save_plugins(cls, plugins: dict[str, PluginInfo], path: Path) -> None:
         """Save plugins to JSON file with metadata and error handling.
 
         Args:
@@ -162,7 +166,7 @@ class PluginSerializer:
         ensure_folder(path.parent)
 
         # Convert plugins to serializable format
-        plugins_dict: Dict[str, SerializedPlugin] = {}
+        plugins_dict: dict[str, SerializedPlugin] = {}
         for plugin_id, plugin in plugins.items():
             try:
                 plugins_dict[plugin_id] = cls.plugin_to_dict(plugin)
@@ -178,15 +182,15 @@ class PluginSerializer:
 
         # Write to file with error handling
         try:
-            with open(path, 'w', encoding='utf-8') as f:
+            with open(path, "w", encoding="utf-8") as f:
                 f.write(serialize_plugin_info(cache_data))
             logger.info(f"Saved {len(plugins_dict)} plugins to {path}")
         except Exception as e:
             logger.error(f"Failed to save plugins to {path}: {e}")
-            raise CacheWriteError(str(path), str(e))
+            raise CacheWriteError(str(path), str(e)) from e
 
     @classmethod
-    def load_plugins(cls, path: Path) -> Dict[str, PluginInfo]:
+    def load_plugins(cls, path: Path) -> dict[str, PluginInfo]:
         """Load plugins from JSON file with validation.
 
         Args:
@@ -200,11 +204,11 @@ class PluginSerializer:
             return {}
 
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding="utf-8") as f:
                 data = deserialize_plugin_info(f.read())
         except Exception as e:
             logger.error(f"Failed to read cache file {path}: {e}")
-            raise CacheCorruptedError(str(path), str(e))
+            raise CacheCorruptedError(str(path), str(e)) from e
 
         # Handle both old format (direct plugin dict) and new format (with metadata)
         if isinstance(data, dict) and "metadata" in data and "plugins" in data:
@@ -213,7 +217,10 @@ class PluginSerializer:
             cache_version = metadata.get("version", "1.0.0")
 
             if cache_version != CACHE_VERSION:
-                logger.warning(f"Cache version mismatch: expected {CACHE_VERSION}, got {cache_version}")
+                logger.warning(
+                    f"Cache version mismatch: expected {CACHE_VERSION}, "
+                    f"got {cache_version}"
+                )
                 raise CacheVersionError(CACHE_VERSION, cache_version, str(path))
 
             plugins_data = data.get("plugins", {})
@@ -223,7 +230,7 @@ class PluginSerializer:
             plugins_data = data
 
         # Convert to PluginInfo objects
-        plugins: Dict[str, PluginInfo] = {}
+        plugins: dict[str, PluginInfo] = {}
         for plugin_id, plugin_data in plugins_data.items():
             if not isinstance(plugin_data, dict):
                 logger.warning(f"Invalid plugin data for ID {plugin_id}")
@@ -239,7 +246,9 @@ class PluginSerializer:
         return plugins
 
     @classmethod
-    def migrate_cache(cls, old_data: Dict[str, Any], old_version: str, new_version: str) -> Dict[str, Any]:
+    def migrate_cache(
+        cls, old_data: dict[str, Any], old_version: str, new_version: str
+    ) -> dict[str, Any]:
         """Migrate cache data from old version to new version.
 
         Args:

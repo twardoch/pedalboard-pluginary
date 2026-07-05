@@ -7,10 +7,10 @@ from typing import Optional
 
 class PluginaryError(Exception):
     """Base exception for all Pluginary errors."""
-    
+
     def __init__(self, message: str, details: Optional[str] = None):
         """Initialize the exception with a message and optional details.
-        
+
         Args:
             message: Main error message.
             details: Optional additional details about the error.
@@ -18,7 +18,7 @@ class PluginaryError(Exception):
         super().__init__(message)
         self.message = message
         self.details = details
-    
+
     def __str__(self) -> str:
         """Return string representation of the error."""
         if self.details:
@@ -32,10 +32,10 @@ class ScannerError(PluginaryError):
 
 class PluginLoadError(ScannerError):
     """Raised when a plugin fails to load."""
-    
+
     def __init__(self, plugin_path: str, reason: Optional[str] = None):
         """Initialize the exception.
-        
+
         Args:
             plugin_path: Path to the plugin that failed to load.
             reason: Optional reason for the failure.
@@ -47,10 +47,12 @@ class PluginLoadError(ScannerError):
 
 class PluginScanError(ScannerError):
     """Raised when scanning a plugin fails."""
-    
-    def __init__(self, plugin_path: str, scanner_type: str, reason: Optional[str] = None):
+
+    def __init__(
+        self, plugin_path: str, scanner_type: str, reason: Optional[str] = None
+    ):
         """Initialize the exception.
-        
+
         Args:
             plugin_path: Path to the plugin that failed to scan.
             scanner_type: Type of scanner that failed (e.g., 'vst3', 'aufx').
@@ -62,16 +64,28 @@ class PluginScanError(ScannerError):
         self.scanner_type = scanner_type
 
 
+class TimeoutError(ScannerError):
+    """Raised when a plugin operation exceeds its time budget.
+
+    ``timeout`` is optional so callers can raise this with just a message; the
+    scanner passes the elapsed budget in seconds when it has one to report.
+    """
+
+    def __init__(self, message: str, timeout: Optional[float] = None):
+        super().__init__(message)
+        self.timeout = timeout
+
+
 class CacheError(PluginaryError):
     """Base exception for cache-related errors."""
 
 
 class CacheCorruptedError(CacheError):
     """Raised when cache file is corrupted."""
-    
+
     def __init__(self, cache_path: str, reason: Optional[str] = None):
         """Initialize the exception.
-        
+
         Args:
             cache_path: Path to the corrupted cache file.
             reason: Optional reason or details about the corruption.
@@ -83,10 +97,10 @@ class CacheCorruptedError(CacheError):
 
 class CacheVersionError(CacheError):
     """Raised when cache version is incompatible."""
-    
+
     def __init__(self, expected: str, actual: str, cache_path: str):
         """Initialize the exception.
-        
+
         Args:
             expected: Expected cache version.
             actual: Actual cache version found.
@@ -102,10 +116,10 @@ class CacheVersionError(CacheError):
 
 class CacheWriteError(CacheError):
     """Raised when writing to cache fails."""
-    
+
     def __init__(self, cache_path: str, reason: Optional[str] = None):
         """Initialize the exception.
-        
+
         Args:
             cache_path: Path to the cache file.
             reason: Optional reason for the write failure.
@@ -121,10 +135,12 @@ class ConfigError(PluginaryError):
 
 class InvalidConfigError(ConfigError):
     """Raised when configuration is invalid."""
-    
-    def __init__(self, config_key: str, invalid_value: str, reason: Optional[str] = None):
+
+    def __init__(
+        self, config_key: str, invalid_value: str, reason: Optional[str] = None
+    ):
         """Initialize the exception.
-        
+
         Args:
             config_key: Configuration key that has invalid value.
             invalid_value: The invalid value.
@@ -138,10 +154,15 @@ class InvalidConfigError(ConfigError):
 
 class PlatformError(PluginaryError):
     """Raised when an operation is not supported on the current platform."""
-    
-    def __init__(self, operation: str, platform: str, supported_platforms: Optional[list[str]] = None):
+
+    def __init__(
+        self,
+        operation: str,
+        platform: str,
+        supported_platforms: Optional[list[str]] = None,
+    ):
         """Initialize the exception.
-        
+
         Args:
             operation: Operation that is not supported.
             platform: Current platform.

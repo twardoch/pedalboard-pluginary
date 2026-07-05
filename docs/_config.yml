@@ -1,0 +1,28 @@
+title: Pedalboard Pluginary
+description: >-
+  Scan, catalogue, and query every VST3 and Audio Unit plugin on your machine —
+  each plugin scanned in its own crash-proof subprocess.
+
+remote_theme: just-the-docs/just-the-docs
+
+url: https://twardoch.github.io
+baseurl: /pedalboard-pluginary
+
+search_enabled: true
+nav_sort: case_insensitive
+
+footer_content: >-
+  Copyright &copy; 2023&#8211;2026 Adam Twardoch.
+  Distributed under the
+  <a href="https://github.com/twardoch/pedalboard-pluginary/blob/main/LICENSE.txt">Apache-2.0 License</a>.
+
+gh_edit_link: true
+gh_edit_link_text: Edit this page on GitHub
+gh_edit_repository: https://github.com/twardoch/pedalboard-pluginary
+gh_edit_branch: main
+gh_edit_source: docs
+gh_edit_view_mode: edit
+
+plugins:
+  - jekyll-remote-theme
+  - jekyll-seo-tag

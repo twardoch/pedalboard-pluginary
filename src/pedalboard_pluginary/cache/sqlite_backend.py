@@ -1,44 +1,45 @@
 """SQLite cache backend for high-performance plugin storage."""
+
 from __future__ import annotations
 
-import sqlite3
 import json
-import time
 import logging
-from typing import Dict, List, Set, Any
+import sqlite3
+import time
 from pathlib import Path
+from typing import Any
 
+from ..exceptions import CacheError
 from ..models import PluginInfo
 from ..protocols import CacheBackend
 from ..serialization import PluginSerializer
-from ..exceptions import CacheError
 
 logger = logging.getLogger(__name__)
 
 
 class SQLiteCacheBackend(CacheBackend):
     """High-performance SQLite cache with indexing and full-text search."""
-    
+
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self._init_schema()
-    
+
     def _connect(self) -> sqlite3.Connection:
         """Create database connection with optimizations."""
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
-        
+
         # Performance optimizations
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")  
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA cache_size=10000")
         conn.execute("PRAGMA temp_store=MEMORY")
         conn.execute("PRAGMA mmap_size=268435456")  # 256MB memory mapping
         conn.execute("PRAGMA page_size=4096")
         conn.execute("PRAGMA optimize")
-        
+
         return conn
-    
+
     def _init_schema(self) -> None:
         """Initialize optimized database schema."""
         with self._connect() as conn:
@@ -56,14 +57,18 @@ class SQLiteCacheBackend(CacheBackend):
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 );
-                
+
                 -- Performance indexes
                 CREATE INDEX IF NOT EXISTS idx_plugins_name ON plugins(name);
                 CREATE INDEX IF NOT EXISTS idx_plugins_type ON plugins(plugin_type);
-                CREATE INDEX IF NOT EXISTS idx_plugins_manufacturer ON plugins(manufacturer);
+                CREATE INDEX IF NOT EXISTS idx_plugins_manufacturer
+                    ON plugins(manufacturer);
                 CREATE INDEX IF NOT EXISTS idx_plugins_path ON plugins(path);
                 CREATE INDEX IF NOT EXISTS idx_plugins_mtime ON plugins(file_mtime);
-                
+
+                -- FTS5 over LIKE: LIKE '%term%' can't use an index and forces
+                -- a full table scan; FTS5 maintains an inverted index so name/
+                -- manufacturer search stays fast as the plugin count grows.
                 -- Full-text search virtual table
                 CREATE VIRTUAL TABLE IF NOT EXISTS plugins_fts USING fts5(
                     id UNINDEXED,
@@ -72,20 +77,20 @@ class SQLiteCacheBackend(CacheBackend):
                     content='plugins',
                     content_rowid='rowid'
                 );
-                
+
                 -- FTS triggers to keep search index updated
                 CREATE TRIGGER IF NOT EXISTS plugins_fts_insert AFTER INSERT ON plugins
                 BEGIN
                     INSERT INTO plugins_fts(rowid, id, name, manufacturer)
                     VALUES (new.rowid, new.id, new.name, new.manufacturer);
                 END;
-                
+
                 CREATE TRIGGER IF NOT EXISTS plugins_fts_delete AFTER DELETE ON plugins
                 BEGIN
                     INSERT INTO plugins_fts(plugins_fts, rowid, id, name, manufacturer)
                     VALUES ('delete', old.rowid, old.id, old.name, old.manufacturer);
                 END;
-                
+
                 CREATE TRIGGER IF NOT EXISTS plugins_fts_update AFTER UPDATE ON plugins
                 BEGIN
                     INSERT INTO plugins_fts(plugins_fts, rowid, id, name, manufacturer)
@@ -93,78 +98,81 @@ class SQLiteCacheBackend(CacheBackend):
                     INSERT INTO plugins_fts(rowid, id, name, manufacturer)
                     VALUES (new.rowid, new.id, new.name, new.manufacturer);
                 END;
-                
+
                 -- Cache metadata table
                 CREATE TABLE IF NOT EXISTS cache_meta (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
                     updated_at REAL NOT NULL
                 );
-                
+
             """)
-            
+
             # Initialize cache version
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR IGNORE INTO cache_meta (key, value, updated_at)
                 VALUES ('version', '1.0', ?)
-            """, (time.time(),))
-    
-    def load(self) -> Dict[str, PluginInfo]:
+            """,
+                (time.time(),),
+            )
+
+    def load(self) -> dict[str, PluginInfo]:
         """Load all cached plugins."""
-        plugins: Dict[str, PluginInfo] = {}
-        
+        plugins: dict[str, PluginInfo] = {}
+
         try:
             with self._connect() as conn:
                 cursor = conn.execute("""
                     SELECT id, data FROM plugins
                     ORDER BY name
                 """)
-                
+
                 for row in cursor:
                     try:
-                        plugin_data = json.loads(row['data'])
+                        plugin_data = json.loads(row["data"])
                         plugin = PluginSerializer.dict_to_plugin(plugin_data)
                         if plugin is not None:  # Only add successfully parsed plugins
-                            plugins[row['id']] = plugin
+                            plugins[row["id"]] = plugin
                     except (json.JSONDecodeError, KeyError, TypeError):
                         # Skip corrupted plugin data
                         continue
-                        
+
         except sqlite3.Error as e:
-            raise CacheError(f"Failed to load plugins from SQLite cache: {e}")
-        
+            raise CacheError(f"Failed to load plugins from SQLite cache: {e}") from e
+
         return plugins
-    
-    def save(self, plugins: Dict[str, PluginInfo]) -> None:
+
+    def save(self, plugins: dict[str, PluginInfo]) -> None:
         """Save plugins to cache."""
         try:
             with self._connect() as conn:
                 # Clear existing data
                 conn.execute("DELETE FROM plugins")
-                
+
                 # Insert all plugins
                 current_time = time.time()
                 for plugin_id, plugin in plugins.items():
                     self._insert_plugin(conn, plugin_id, plugin, current_time)
-                
+
                 conn.commit()
-                
+
         except sqlite3.Error as e:
-            raise CacheError(f"Failed to save plugins to SQLite cache: {e}")
-    
-    def add_plugins(self, plugins: List) -> None:
+            raise CacheError(f"Failed to save plugins to SQLite cache: {e}") from e
+
+    def add_plugins(self, plugins: list) -> None:
         """Add multiple plugins to cache without clearing existing data.
-        
+
         Args:
             plugins: List of PluginInfo objects or dictionaries to add to cache.
         """
         if not plugins:
             return
-            
+
         try:
             with self._connect() as conn:
                 current_time = time.time()
-                
+
                 for plugin_data in plugins:
                     # Convert dict to PluginInfo if needed
                     if isinstance(plugin_data, dict):
@@ -173,57 +181,65 @@ class SQLiteCacheBackend(CacheBackend):
                             continue  # Skip invalid plugin data
                     else:
                         plugin = plugin_data
-                    
+
                     # Generate plugin ID from path
                     plugin_id = str(plugin.path)
-                    
+
                     # Check if plugin exists
-                    cursor = conn.execute("SELECT id FROM plugins WHERE id = ?", (plugin_id,))
+                    cursor = conn.execute(
+                        "SELECT id FROM plugins WHERE id = ?", (plugin_id,)
+                    )
                     if cursor.fetchone():
                         # Update existing plugin
                         self._update_plugin(conn, plugin_id, plugin, current_time)
                     else:
                         # Insert new plugin
                         self._insert_plugin(conn, plugin_id, plugin, current_time)
-                
+
                 conn.commit()
-                
+
         except sqlite3.Error as e:
-            raise CacheError(f"Failed to add plugins to SQLite cache: {e}")
-    
+            raise CacheError(f"Failed to add plugins to SQLite cache: {e}") from e
+
     def update(self, plugin_id: str, plugin: PluginInfo) -> None:
         """Update a single plugin in cache."""
         try:
             with self._connect() as conn:
                 current_time = time.time()
-                
+
                 # Check if plugin exists
-                cursor = conn.execute("SELECT id FROM plugins WHERE id = ?", (plugin_id,))
+                cursor = conn.execute(
+                    "SELECT id FROM plugins WHERE id = ?", (plugin_id,)
+                )
                 if cursor.fetchone():
                     # Update existing plugin
                     self._update_plugin(conn, plugin_id, plugin, current_time)
                 else:
                     # Insert new plugin
                     self._insert_plugin(conn, plugin_id, plugin, current_time)
-                
+
                 conn.commit()
-                
+
         except sqlite3.Error as e:
-            raise CacheError(f"Failed to update plugin {plugin_id} in SQLite cache: {e}")
-    
+            raise CacheError(
+                f"Failed to update plugin {plugin_id} in SQLite cache: {e}"
+            ) from e
+
     def delete(self, plugin_id: str) -> None:
         """Remove a plugin from cache."""
         try:
             with self._connect() as conn:
                 conn.execute("DELETE FROM plugins WHERE id = ?", (plugin_id,))
                 conn.commit()
-                
+
         except sqlite3.Error as e:
-            raise CacheError(f"Failed to delete plugin {plugin_id} from SQLite cache: {e}")
-    
-    def get_all_plugins(self) -> List[Dict[str, Any]]:
+            raise CacheError(
+                f"Failed to delete plugin {plugin_id} from SQLite cache: {e}"
+            ) from e
+
+    def get_all_plugins(self) -> list[dict[str, Any]]:
         """Get all plugins from cache as a list of dictionaries.
-        
+
         Returns:
             List of plugin dictionaries.
         """
@@ -233,17 +249,17 @@ class SQLiteCacheBackend(CacheBackend):
                 cursor = conn.execute("SELECT id, data FROM plugins")
                 for row in cursor:
                     try:
-                        plugin_data = json.loads(row['data'])
+                        plugin_data = json.loads(row["data"])
                         plugins.append(plugin_data)
                     except (json.JSONDecodeError, KeyError, TypeError):
                         continue
         except sqlite3.Error as e:
-            raise CacheError(f"Failed to get all plugins from SQLite cache: {e}")
+            raise CacheError(f"Failed to get all plugins from SQLite cache: {e}") from e
         return plugins
-    
-    def get_cached_paths(self) -> Set[str]:
+
+    def get_cached_paths(self) -> set[str]:
         """Get all cached plugin paths for quick existence checking.
-        
+
         Returns:
             Set of plugin paths that are already cached.
         """
@@ -253,157 +269,184 @@ class SQLiteCacheBackend(CacheBackend):
                 cursor = conn.execute("SELECT data FROM plugins")
                 for row in cursor:
                     try:
-                        plugin_data = json.loads(row['data'])
-                        if 'path' in plugin_data:
-                            paths.add(plugin_data['path'])
+                        plugin_data = json.loads(row["data"])
+                        if "path" in plugin_data:
+                            paths.add(plugin_data["path"])
                     except (json.JSONDecodeError, KeyError, TypeError):
                         continue
         except sqlite3.Error as e:
             logger.warning(f"Failed to get cached paths: {e}")
         return paths
-    
+
     def clear(self) -> None:
         """Clear entire cache."""
         try:
             with self._connect() as conn:
                 conn.execute("DELETE FROM plugins")
                 conn.commit()
-                
+
         except sqlite3.Error as e:
-            raise CacheError(f"Failed to clear SQLite cache: {e}")
-    
+            raise CacheError(f"Failed to clear SQLite cache: {e}") from e
+
     def exists(self) -> bool:
         """Check if cache exists."""
         return self.db_path.exists()
-    
-    def search(self, query: str, limit: int = 50) -> List[PluginInfo]:
+
+    def search(self, query: str, limit: int = 50) -> list[PluginInfo]:
         """Full-text search for plugins."""
         plugins = []
-        
+
         try:
             with self._connect() as conn:
-                cursor = conn.execute("""
-                    SELECT p.id, p.data 
+                cursor = conn.execute(
+                    """
+                    SELECT p.id, p.data
                     FROM plugins p
                     JOIN plugins_fts fts ON p.rowid = fts.rowid
                     WHERE plugins_fts MATCH ?
                     ORDER BY rank
                     LIMIT ?
-                """, (query, limit))
-                
+                """,
+                    (query, limit),
+                )
+
                 for row in cursor:
                     try:
-                        plugin_data = json.loads(row['data'])
+                        plugin_data = json.loads(row["data"])
                         plugin = PluginSerializer.dict_to_plugin(plugin_data)
                         if plugin is not None:  # Only add successfully parsed plugins
                             plugins.append(plugin)
                     except (json.JSONDecodeError, KeyError, TypeError):
                         continue
-                        
+
         except sqlite3.Error as e:
-            raise CacheError(f"Failed to search plugins: {e}")
-        
+            raise CacheError(f"Failed to search plugins: {e}") from e
+
         return plugins
-    
-    def filter_by_type(self, plugin_type: str) -> List[PluginInfo]:
+
+    def filter_by_type(self, plugin_type: str) -> list[PluginInfo]:
         """Filter plugins by type."""
         plugins = []
-        
+
         try:
             with self._connect() as conn:
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT id, data FROM plugins
                     WHERE plugin_type = ?
                     ORDER BY name
-                """, (plugin_type,))
-                
+                """,
+                    (plugin_type,),
+                )
+
                 for row in cursor:
                     try:
-                        plugin_data = json.loads(row['data'])
+                        plugin_data = json.loads(row["data"])
                         plugin = PluginSerializer.dict_to_plugin(plugin_data)
                         if plugin is not None:  # Only add successfully parsed plugins
                             plugins.append(plugin)
                     except (json.JSONDecodeError, KeyError, TypeError):
                         continue
-                        
+
         except sqlite3.Error as e:
-            raise CacheError(f"Failed to filter plugins by type: {e}")
-        
+            raise CacheError(f"Failed to filter plugins by type: {e}") from e
+
         return plugins
-    
-    def get_stats(self) -> Dict[str, int]:
+
+    def get_stats(self) -> dict[str, int]:
         """Get cache statistics."""
         stats = {}
-        
+
         try:
             with self._connect() as conn:
                 # Total plugin count
                 cursor = conn.execute("SELECT COUNT(*) as count FROM plugins")
-                stats['total_plugins'] = cursor.fetchone()['count']
-                
+                stats["total_plugins"] = cursor.fetchone()["count"]
+
                 # Plugin counts by type
                 cursor = conn.execute("""
-                    SELECT plugin_type, COUNT(*) as count 
-                    FROM plugins 
+                    SELECT plugin_type, COUNT(*) as count
+                    FROM plugins
                     GROUP BY plugin_type
                 """)
                 for row in cursor:
-                    stats[f"{row['plugin_type']}_plugins"] = row['count']
-                
+                    stats[f"{row['plugin_type']}_plugins"] = row["count"]
+
                 # Database size
-                cursor = conn.execute("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()")
-                stats['db_size_bytes'] = cursor.fetchone()['size']
-                
+                cursor = conn.execute(
+                    "SELECT page_count * page_size as size "
+                    "FROM pragma_page_count(), pragma_page_size()"
+                )
+                stats["db_size_bytes"] = cursor.fetchone()["size"]
+
         except sqlite3.Error as e:
-            raise CacheError(f"Failed to get cache stats: {e}")
-        
+            raise CacheError(f"Failed to get cache stats: {e}") from e
+
         return stats
-    
-    def _insert_plugin(self, conn: sqlite3.Connection, plugin_id: str, plugin: PluginInfo, current_time: float) -> None:
+
+    def _insert_plugin(
+        self,
+        conn: sqlite3.Connection,
+        plugin_id: str,
+        plugin: PluginInfo,
+        current_time: float,
+    ) -> None:
         """Insert a plugin into the database."""
         plugin_data = PluginSerializer.plugin_to_dict(plugin)
-        
+
         # Handle path - it's a string in the current model
         plugin_path = plugin.path if isinstance(plugin.path, str) else str(plugin.path)
-        
-        conn.execute("""
+
+        conn.execute(
+            """
             INSERT INTO plugins (
                 id, name, path, plugin_type, manufacturer, parameter_count,
                 data, file_mtime, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            plugin_id,
-            plugin.name,
-            plugin_path,
-            plugin.plugin_type,
-            plugin.manufacturer,
-            len(plugin.parameters),
-            json.dumps(plugin_data),
-            0,  # No file mtime since path is string
-            current_time,
-            current_time
-        ))
-    
-    def _update_plugin(self, conn: sqlite3.Connection, plugin_id: str, plugin: PluginInfo, current_time: float) -> None:
+        """,
+            (
+                plugin_id,
+                plugin.name,
+                plugin_path,
+                plugin.plugin_type,
+                plugin.manufacturer,
+                len(plugin.parameters),
+                json.dumps(plugin_data),
+                0,  # No file mtime since path is string
+                current_time,
+                current_time,
+            ),
+        )
+
+    def _update_plugin(
+        self,
+        conn: sqlite3.Connection,
+        plugin_id: str,
+        plugin: PluginInfo,
+        current_time: float,
+    ) -> None:
         """Update an existing plugin in the database."""
         plugin_data = PluginSerializer.plugin_to_dict(plugin)
-        
+
         # Handle path - it's a string in the current model
         plugin_path = plugin.path if isinstance(plugin.path, str) else str(plugin.path)
-        
-        conn.execute("""
+
+        conn.execute(
+            """
             UPDATE plugins SET
                 name = ?, path = ?, plugin_type = ?, manufacturer = ?,
                 parameter_count = ?, data = ?, file_mtime = ?, updated_at = ?
             WHERE id = ?
-        """, (
-            plugin.name,
-            plugin_path,
-            plugin.plugin_type,
-            plugin.manufacturer,
-            len(plugin.parameters),
-            json.dumps(plugin_data),
-            0,  # No file mtime since path is string
-            current_time,
-            plugin_id
-        ))
+        """,
+            (
+                plugin.name,
+                plugin_path,
+                plugin.plugin_type,
+                plugin.manufacturer,
+                len(plugin.parameters),
+                json.dumps(plugin_data),
+                0,  # No file mtime since path is string
+                current_time,
+                plugin_id,
+            ),
+        )

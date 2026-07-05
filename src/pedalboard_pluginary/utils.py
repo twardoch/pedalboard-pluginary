@@ -1,12 +1,22 @@
-def ensure_folder(path):
-    """Ensure that a folder exists. If path is a file, ensure its parent directory exists."""
+# this_file: src/pedalboard_pluginary/utils.py
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+
+def ensure_folder(path: Path) -> None:
+    """Ensure that a folder exists.
+
+    If path is a file, ensure its parent directory exists.
+    """
     if path.suffix:  # If path has a file extension, it's likely a file
         path.parent.mkdir(parents=True, exist_ok=True)
     else:
         path.mkdir(parents=True, exist_ok=True)
 
 
-def from_pb_param(data):
+def from_pb_param(data: Any) -> float | bool | str:
     drep = str(data)
     try:
         return float(drep)

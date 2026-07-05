@@ -1,193 +1,163 @@
 # tests/test_core.py
-import pytest
 from unittest.mock import Mock, patch
-import json
 
 from pedalboard_pluginary.core import PedalboardPluginary
 from pedalboard_pluginary.models import PluginInfo, PluginParameter
-from pedalboard_pluginary.exceptions import PluginaryError
+
+
+def make_plugin(plugin_id, name, plugin_type, manufacturer=None, parameters=None):
+    """Build a PluginInfo for use as cache.load() output."""
+    return PluginInfo(
+        id=plugin_id,
+        name=name,
+        path=f"/plugins/{name}",
+        filename=f"{name}.{plugin_type}",
+        plugin_type=plugin_type,
+        parameters=parameters or {},
+        manufacturer=manufacturer,
+        name_in_file=name,
+    )
 
 
 class TestPedalboardPluginary:
     """Test suite for PedalboardPluginary core class."""
-    
-    def test_init_default(self):
-        """Test PedalboardPluginary initialization with default parameters."""
+
+    @patch("pedalboard_pluginary.core.IsolatedPedalboardScanner")
+    @patch("pedalboard_pluginary.core.SQLiteCacheBackend")
+    def test_init_builds_cache_and_scanner(self, mock_cache_cls, mock_scanner_cls):
+        """PedalboardPluginary builds its own cache and scanner on init."""
         pluginary = PedalboardPluginary()
-        assert pluginary.plugins == {}
-        assert pluginary.scanner is not None
-        
-    def test_init_custom_scanner(self):
-        """Test PedalboardPluginary initialization with custom scanner."""
-        mock_scanner = Mock()
-        pluginary = PedalboardPluginary(scanner=mock_scanner)
-        assert pluginary.scanner == mock_scanner
-        
-    @patch('pedalboard_pluginary.core.PedalboardPluginary.load_data')
-    def test_load_data_called_on_init(self, mock_load_data):
-        """Test that load_data is called during initialization."""
-        PedalboardPluginary()
-        mock_load_data.assert_called_once()
-        
-    @patch('pedalboard_pluginary.data.load_json_file')
-    def test_load_data_success(self, mock_load_json):
-        """Test successful loading of plugin data."""
-        mock_plugin_data = {
-            "vst3/TestPlugin": {
-                "id": "vst3/TestPlugin",
-                "name": "TestPlugin",
-                "path": "/test/path",
-                "filename": "TestPlugin.vst3",
-                "plugin_type": "vst3",
-                "parameters": {},
-                "manufacturer": "TestManufacturer",
-                "name_in_file": "TestPlugin"
-            }
-        }
-        mock_load_json.return_value = mock_plugin_data
-        
+
+        assert pluginary.cache is mock_cache_cls.return_value
+        assert pluginary.scanner is mock_scanner_cls.return_value
+
+    @patch("pedalboard_pluginary.core.IsolatedPedalboardScanner")
+    @patch("pedalboard_pluginary.core.SQLiteCacheBackend")
+    def test_init_forwards_scanner_kwargs(self, mock_cache_cls, mock_scanner_cls):
+        """Extra kwargs are forwarded to the scanner constructor."""
+        PedalboardPluginary(max_workers=2, verbose=True)
+
+        mock_scanner_cls.assert_called_once_with(max_workers=2, verbose=True)
+
+    @patch("pedalboard_pluginary.core.IsolatedPedalboardScanner")
+    @patch("pedalboard_pluginary.core.SQLiteCacheBackend")
+    def test_scan_delegates_to_scanner(self, mock_cache_cls, mock_scanner_cls):
+        """scan() delegates to the scanner with rescan/extra_folders."""
         pluginary = PedalboardPluginary()
-        assert len(pluginary.plugins) == 1
-        assert "vst3/TestPlugin" in pluginary.plugins
-        assert pluginary.plugins["vst3/TestPlugin"].name == "TestPlugin"
-        
-    @patch('pedalboard_pluginary.data.load_json_file')
-    def test_load_data_file_not_found(self, mock_load_json):
-        """Test handling of missing cache file."""
-        mock_load_json.side_effect = FileNotFoundError("Cache file not found")
-        
-        pluginary = PedalboardPluginary()
-        assert pluginary.plugins == {}
-        
-    @patch('pedalboard_pluginary.data.load_json_file')
-    def test_load_data_invalid_json(self, mock_load_json):
-        """Test handling of invalid JSON in cache file."""
-        mock_load_json.side_effect = json.JSONDecodeError("Invalid JSON", "test", 0)
-        
-        pluginary = PedalboardPluginary()
-        assert pluginary.plugins == {}
-        
-    def test_full_scan_delegates_to_scanner(self):
-        """Test that full_scan delegates to scanner."""
-        mock_scanner = Mock()
-        pluginary = PedalboardPluginary(scanner=mock_scanner)
-        
-        pluginary.full_scan()
-        mock_scanner.rescan.assert_called_once()
-        
-    def test_update_scan_delegates_to_scanner(self):
-        """Test that update_scan delegates to scanner."""
-        mock_scanner = Mock()
-        pluginary = PedalboardPluginary(scanner=mock_scanner)
-        
-        pluginary.update_scan()
-        mock_scanner.update.assert_called_once()
-        
-    def test_get_plugin_existing(self):
-        """Test getting an existing plugin."""
-        plugin_info = PluginInfo(
-            id="vst3/TestPlugin",
-            name="TestPlugin",
-            path="/test/path",
-            filename="TestPlugin.vst3",
-            plugin_type="vst3",
-            parameters={},
-            manufacturer="TestManufacturer",
-            name_in_file="TestPlugin"
+
+        pluginary.scan(rescan=True, extra_folders=["/extra"])
+
+        pluginary.scanner.scan.assert_called_once_with(
+            rescan=True, extra_folders=["/extra"]
         )
-        
+
+    @patch("pedalboard_pluginary.core.IsolatedPedalboardScanner")
+    @patch("pedalboard_pluginary.core.SQLiteCacheBackend")
+    def test_list_plugins_empty(self, mock_cache_cls, mock_scanner_cls):
+        """list_plugins returns an empty list when the cache is empty."""
         pluginary = PedalboardPluginary()
-        pluginary.plugins = {"vst3/TestPlugin": plugin_info}
-        
-        result = pluginary.get_plugin("vst3/TestPlugin")
-        assert result == plugin_info
-        
-    def test_get_plugin_non_existing(self):
-        """Test getting a non-existing plugin."""
+        pluginary.cache = Mock()
+        pluginary.cache.load.return_value = {}
+
+        assert pluginary.list_plugins() == []
+
+    @patch("pedalboard_pluginary.core.IsolatedPedalboardScanner")
+    @patch("pedalboard_pluginary.core.SQLiteCacheBackend")
+    def test_list_plugins_returns_dicts(self, mock_cache_cls, mock_scanner_cls):
+        """list_plugins returns a list of dicts with the expected keys."""
         pluginary = PedalboardPluginary()
-        
-        result = pluginary.get_plugin("non/existing")
-        assert result is None
-        
-    def test_list_plugins_empty(self):
-        """Test listing plugins when none exist."""
-        pluginary = PedalboardPluginary()
-        
+        pluginary.cache = Mock()
+        pluginary.cache.load.return_value = {
+            "vst3/TestPlugin": make_plugin(
+                "vst3/TestPlugin",
+                "TestPlugin",
+                "vst3",
+                manufacturer="FabFilter",
+                parameters={"Gain": PluginParameter(name="Gain", value=0.5)},
+            )
+        }
+
         result = pluginary.list_plugins()
-        assert result == {}
-        
-    def test_list_plugins_with_filter(self):
-        """Test listing plugins with type filter."""
-        vst3_plugin = PluginInfo(
-            id="vst3/TestPlugin",
-            name="TestPlugin",
-            path="/test/path",
-            filename="TestPlugin.vst3",
-            plugin_type="vst3",
-            parameters={},
-            manufacturer="TestManufacturer",
-            name_in_file="TestPlugin"
-        )
-        
-        au_plugin = PluginInfo(
-            id="aufx/TestAU",
-            name="TestAU",
-            path="/test/path",
-            filename="TestAU.component",
-            plugin_type="aufx",
-            parameters={},
-            manufacturer="TestManufacturer",
-            name_in_file="TestAU"
-        )
-        
-        pluginary = PedalboardPluginary()
-        pluginary.plugins = {
-            "vst3/TestPlugin": vst3_plugin,
-            "aufx/TestAU": au_plugin
-        }
-        
-        result = pluginary.list_plugins(plugin_type="vst3")
+
+        assert isinstance(result, list)
         assert len(result) == 1
-        assert "vst3/TestPlugin" in result
-        
-    def test_list_plugins_with_manufacturer_filter(self):
-        """Test listing plugins with manufacturer filter."""
-        plugin1 = PluginInfo(
-            id="vst3/Plugin1",
-            name="Plugin1",
-            path="/test/path1",
-            filename="Plugin1.vst3",
-            plugin_type="vst3",
-            parameters={},
-            manufacturer="FabFilter",
-            name_in_file="Plugin1"
-        )
-        
-        plugin2 = PluginInfo(
-            id="vst3/Plugin2",
-            name="Plugin2",
-            path="/test/path2",
-            filename="Plugin2.vst3",
-            plugin_type="vst3",
-            parameters={},
-            manufacturer="Waves",
-            name_in_file="Plugin2"
-        )
-        
+        entry = result[0]
+        assert entry["id"] == "vst3/TestPlugin"
+        assert entry["name"] == "TestPlugin"
+        assert entry["type"] == "vst3"
+        assert entry["manufacturer"] == "FabFilter"
+        assert entry["params"] == {"Gain": 0.5}
+
+    @patch("pedalboard_pluginary.core.IsolatedPedalboardScanner")
+    @patch("pedalboard_pluginary.core.SQLiteCacheBackend")
+    def test_list_plugins_name_filter(self, mock_cache_cls, mock_scanner_cls):
+        """The name filter matches on a case-insensitive substring."""
         pluginary = PedalboardPluginary()
-        pluginary.plugins = {
-            "vst3/Plugin1": plugin1,
-            "vst3/Plugin2": plugin2
+        pluginary.cache = Mock()
+        pluginary.cache.load.return_value = {
+            "vst3/ProQ": make_plugin("vst3/ProQ", "Pro-Q 3", "vst3"),
+            "vst3/Reverb": make_plugin("vst3/Reverb", "Big Reverb", "vst3"),
         }
-        
-        result = pluginary.list_plugins(manufacturer="FabFilter")
-        assert len(result) == 1
-        assert "vst3/Plugin1" in result
-        
-    def test_plugin_count(self):
-        """Test getting plugin count."""
+
+        result = pluginary.list_plugins(name="pro-q")
+
+        assert [p["id"] for p in result] == ["vst3/ProQ"]
+
+    @patch("pedalboard_pluginary.core.IsolatedPedalboardScanner")
+    @patch("pedalboard_pluginary.core.SQLiteCacheBackend")
+    def test_list_plugins_manufacturer_filter(self, mock_cache_cls, mock_scanner_cls):
+        """The manufacturer filter matches on a case-insensitive substring."""
         pluginary = PedalboardPluginary()
-        assert pluginary.plugin_count == 0
-        
-        pluginary.plugins = {"test": Mock()}
-        assert pluginary.plugin_count == 1
+        pluginary.cache = Mock()
+        pluginary.cache.load.return_value = {
+            "vst3/Plugin1": make_plugin("vst3/Plugin1", "Plugin1", "vst3", "FabFilter"),
+            "vst3/Plugin2": make_plugin("vst3/Plugin2", "Plugin2", "vst3", "Waves"),
+        }
+
+        result = pluginary.list_plugins(manufacturer="fabfilter")
+
+        assert [p["id"] for p in result] == ["vst3/Plugin1"]
+
+    @patch("pedalboard_pluginary.core.IsolatedPedalboardScanner")
+    @patch("pedalboard_pluginary.core.SQLiteCacheBackend")
+    def test_list_plugins_type_filter(self, mock_cache_cls, mock_scanner_cls):
+        """The type filter matches on an exact plugin_type."""
+        pluginary = PedalboardPluginary()
+        pluginary.cache = Mock()
+        pluginary.cache.load.return_value = {
+            "vst3/Plugin1": make_plugin("vst3/Plugin1", "Plugin1", "vst3"),
+            "aufx/Plugin2": make_plugin("aufx/Plugin2", "Plugin2", "aufx"),
+        }
+
+        result = pluginary.list_plugins(type="vst3")
+
+        assert [p["id"] for p in result] == ["vst3/Plugin1"]
+
+    @patch("pedalboard_pluginary.core.IsolatedPedalboardScanner")
+    @patch("pedalboard_pluginary.core.SQLiteCacheBackend")
+    def test_get_plugin_details_existing(self, mock_cache_cls, mock_scanner_cls):
+        """get_plugin_details returns a dict for a known plugin id."""
+        pluginary = PedalboardPluginary()
+        pluginary.cache = Mock()
+        pluginary.cache.load.return_value = {
+            "vst3/TestPlugin": make_plugin(
+                "vst3/TestPlugin", "TestPlugin", "vst3", "FabFilter"
+            )
+        }
+
+        result = pluginary.get_plugin_details("vst3/TestPlugin")
+
+        assert result is not None
+        assert result["id"] == "vst3/TestPlugin"
+        assert result["name"] == "TestPlugin"
+        assert result["manufacturer"] == "FabFilter"
+
+    @patch("pedalboard_pluginary.core.IsolatedPedalboardScanner")
+    @patch("pedalboard_pluginary.core.SQLiteCacheBackend")
+    def test_get_plugin_details_missing(self, mock_cache_cls, mock_scanner_cls):
+        """get_plugin_details returns None for an unknown plugin id."""
+        pluginary = PedalboardPluginary()
+        pluginary.cache = Mock()
+        pluginary.cache.load.return_value = {}
+
+        assert pluginary.get_plugin_details("non/existing") is None

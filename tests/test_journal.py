@@ -1,10 +1,23 @@
 import sqlite3
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
+from pedalboard_pluginary.cache.sqlite_backend import SQLiteCacheBackend
 from pedalboard_pluginary.scanner_isolated import IsolatedPedalboardScanner, ScanJournal
+
+
+def _valid_result(path: str, name: str, plugin_type: str) -> dict:
+    """Build a serialized-plugin dict the cache backend will accept."""
+    return {
+        "id": f"{plugin_type}/{name}",
+        "name": name,
+        "path": path,
+        "filename": f"{name}.{plugin_type}",
+        "plugin_type": plugin_type,
+        "parameters": {},
+    }
 
 
 @pytest.fixture
@@ -20,7 +33,9 @@ def journal(journal_path: Path) -> ScanJournal:
 def test_journal_creation(journal: ScanJournal, journal_path: Path):
     assert journal_path.exists()
     with sqlite3.connect(journal_path) as conn:
-        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='journal'")
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='journal'"
+        )
         assert cursor.fetchone() is not None
 
 
@@ -38,7 +53,9 @@ def test_update_status(journal: ScanJournal):
 
     with sqlite3.connect(journal.journal_path) as conn:
         conn.row_factory = sqlite3.Row
-        cursor = conn.execute("SELECT status, result_json FROM journal WHERE plugin_id=?", (plugin_id,))
+        cursor = conn.execute(
+            "SELECT status, result_json FROM journal WHERE plugin_id=?", (plugin_id,)
+        )
         row = cursor.fetchone()
         assert row["status"] == "success"
         assert row["result_json"] is not None
@@ -56,55 +73,46 @@ def test_get_summary(journal: ScanJournal):
 
 @patch("pedalboard_pluginary.scanner_isolated.run_scan_single")
 def test_scan_resume(mock_run_scan_single, tmp_path: Path):
-    """Simulate a crash and resume a scan."""
-    cache_dir = tmp_path / "cache"
-    cache_dir.mkdir()
+    """A pre-existing journal resumes scanning only the still-pending plugins."""
+    journal_path = tmp_path / "scan_journal.db"
+    cache = SQLiteCacheBackend(db_path=tmp_path / "plugins.db")
 
-    mock_cache_backend = MagicMock()
-    with patch("pedalboard_pluginary.data.get_cache_path", return_value=cache_dir / "plugins.db"):
-        # 1. Initial scan that "crashes"
-        scanner1 = IsolatedPedalboardScanner(cache_backend=mock_cache_backend)
-        plugins_to_scan = {
-            ("/path/to/plugin1", "Plugin 1", "vst3"),
-            ("/path/to/plugin2", "Plugin 2", "vst3"),
-        }
+    plugin1 = ("/path/to/plugin1", "Plugin1", "vst3")
+    plugin2 = ("/path/to/plugin2", "Plugin2", "vst3")
 
-        # Simulate that scan_single is called only for the first plugin
-        def side_effect_crash(*args, **kwargs):
-            if kwargs["plugin_path"] == "/path/to/plugin1":
-                # Simulate a successful scan for plugin1
-                journal = ScanJournal(Path(kwargs["journal_path"]))
-                journal.update_status(kwargs["plugin_path"], "success", {"name": "Plugin 1"})
-                journal.close()
-            else:
-                # Simulate a crash before the second plugin is scanned
-                raise Exception("Simulated crash")
+    # Seed a journal as if a previous scan finished plugin1 then was killed
+    # before it could reach plugin2 or commit.
+    seed = ScanJournal(journal_path)
+    seed.add_pending({plugin1[0], plugin2[0]})
+    seed.update_status(plugin1[0], "success", _valid_result(*plugin1))
+    seed.close()
 
-        mock_run_scan_single.side_effect = side_effect_crash
+    def mark_success(path, name, plugin_type, journal_path_str, timeout, verbose):
+        journal = ScanJournal(Path(journal_path_str))
+        journal.update_status(path, "success", _valid_result(path, name, plugin_type))
+        journal.close()
 
-        with pytest.raises(Exception, match="Simulated crash"):
-            scanner1.scan(rescan=True)
+    mock_run_scan_single.side_effect = mark_success
 
-        # Verify that the journal file exists and has the correct state
-        assert scanner1.journal_path.exists()
-        summary1 = scanner1.journal.get_summary()
-        assert summary1["success"] == 1
-        assert summary1["pending"] == 1
+    scanner = IsolatedPedalboardScanner(cache_backend=cache, journal_path=journal_path)
+    with patch.object(
+        IsolatedPedalboardScanner,
+        "_find_plugins_to_scan",
+        return_value={plugin1, plugin2},
+    ):
+        scanner.scan()
 
-        # 2. Resumed scan
-        mock_run_scan_single.side_effect = None  # Reset side effect
-        scanner2 = IsolatedPedalboardScanner()
-        scanner2.scan()
+    # Only the still-pending plugin2 should have been scanned on resume.
+    mock_run_scan_single.assert_called_once_with(
+        plugin2[0],
+        plugin2[1],
+        plugin2[2],
+        str(journal_path),
+        scanner.timeout,
+        scanner.verbose,
+    )
 
-        # Verify that scan_single was only called for the pending plugin
-        mock_run_scan_single.assert_called_once_with(
-            "/path/to/plugin2",
-            "Plugin 2",
-            "vst3",
-            str(scanner2.journal_path),
-            scanner2.timeout,
-            scanner2.verbose,
-        )
-
-        # Verify that the journal is deleted after a successful commit
-        assert not scanner2.journal_path.exists()
+    # Both plugins end up committed and the journal is cleaned up on success.
+    assert not journal_path.exists()
+    committed = {p["path"] for p in cache.get_all_plugins()}
+    assert committed == {plugin1[0], plugin2[0]}

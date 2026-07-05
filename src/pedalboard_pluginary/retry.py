@@ -1,45 +1,47 @@
 """
 Retry logic for handling transient failures.
 """
+
 from __future__ import annotations
 
 import functools
 import logging
 import time
-from typing import Any, Callable, Optional, Tuple, Type, TypeVar, Union
+from typing import Any, Callable, TypeVar
 
 from .constants import MAX_SCAN_RETRIES, SCAN_RETRY_DELAY
 
 logger = logging.getLogger(__name__)
 
-F = TypeVar('F', bound=Callable[..., Any])
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 def with_retry(
-    exceptions: Union[Type[Exception], Tuple[Type[Exception], ...]],
+    exceptions: type[Exception] | tuple[type[Exception], ...],
     max_attempts: int = MAX_SCAN_RETRIES,
     delay: float = SCAN_RETRY_DELAY,
     backoff_factor: float = 2.0,
     max_delay: float = 60.0,
 ) -> Callable[[F], F]:
     """Decorator that retries a function on specified exceptions.
-    
+
     Args:
         exceptions: Exception or tuple of exceptions to catch and retry on.
         max_attempts: Maximum number of attempts (including the first).
         delay: Initial delay between retries in seconds.
         backoff_factor: Factor to multiply delay by after each failure.
         max_delay: Maximum delay between retries in seconds.
-        
+
     Returns:
         Decorated function that will retry on failure.
     """
+
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             current_delay = delay
-            last_exception: Optional[Exception] = None
-            
+            last_exception: Exception | None = None
+
             for attempt in range(max_attempts):
                 try:
                     return func(*args, **kwargs)
@@ -51,24 +53,23 @@ def with_retry(
                             f"{func.__name__} failed after {max_attempts} attempts: {e}"
                         )
                         raise
-                    
+
                     logger.info(
-                        f"{func.__name__} failed (attempt {attempt + 1}/{max_attempts}): {e}. "
+                        f"{func.__name__} failed "
+                        f"(attempt {attempt + 1}/{max_attempts}): {e}. "
                         f"Retrying in {current_delay:.1f}s..."
                     )
                     time.sleep(current_delay)
-                    
+
                     # Exponential backoff with max delay
                     current_delay = min(current_delay * backoff_factor, max_delay)
-            
+
             # This should never be reached, but just in case
             if last_exception:
                 raise last_exception
             else:
                 raise RuntimeError(f"{func.__name__} failed with unknown error")
-        
+
         return wrapper  # type: ignore[return-value]
-    
+
     return decorator
-
-

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Modernization pass (2026-07-05)
+- **Packaging**: Declared the real runtime dependencies. `click` and `rich` (used by the CLI) were missing and are now required; the unused `fire` and `python-benedict` were dropped. Fixed the console-script entry point, which pointed at a non-existent `__main__:main` (now `__main__:cli`).
+- **Tooling**: Replaced flake8/black/isort with `ruff` (lint + format); `ruff check` and `mypy` are clean. Added a `hatch-test` env so `uvx hatch test` runs with coverage.
+- **CI/CD**: Added `.github/workflows/ci.yml` (ruff, mypy, and pytest on Python 3.10–3.12) and `release.yml` (build + publish to PyPI on tag). Added `build.sh`.
+- **Bug fixes**:
+  - `data.get_cache_path` now honours `$XDG_CACHE_HOME`/`~/.cache` on Linux instead of using the macOS path everywhere.
+  - Consolidated the duplicate `TimeoutError` into the exception hierarchy (subclass of `ScannerError`); `timeout.py` reuses it.
+- **Tests**: Repaired the suite, which had drifted from the v1.1.x refactor (a broken `from e` syntax error, tests importing the removed `scanners` package, and stale `PedalboardPluginary`/`PluginParameter`/`get_cache_path` expectations). Plugin scanning is now fully mocked so the suite runs on machines with no plugins installed. 77 tests pass.
+- **Docs**: Rewrote `README.md` (562 → ~150 lines) against the current API and added a Jekyll (Just the Docs) site under `docs/` with CLI and architecture pages.
+
 ### Fixed (2025-08-06)
 - **AU Plugin Scanning**: Fixed Audio Unit plugin discovery on macOS
   - Corrected regex pattern in scanner_isolated.py to match auval output format

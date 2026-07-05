@@ -1,45 +1,26 @@
 # Pedalboard Pluginary - TODO
 
+## Done (2026-07-05 modernization pass)
 
-## Phase B
+- [x] Declare real deps (add click, rich; drop fire, python-benedict); fix entry point
+- [x] Switch to ruff + mypy; `ruff check` and `mypy` clean
+- [x] Add CI (ruff/mypy/pytest, py3.10–3.12) and release (PyPI-on-tag) workflows; add build.sh
+- [x] Fix Linux cache path to honour XDG_CACHE_HOME
+- [x] Consolidate duplicate TimeoutError into the exception hierarchy
+- [x] Repair the test suite; mock plugin scanning; 77 tests pass
+- [x] Rewrite README against the current API; add Jekyll docs/
 
-### Performance & Optimization
+## Next
 
-- [ ] Performance benchmarking of scan operations with 1000+ plugins
-- [ ] Optimize journal database operations for large plugin collections
-- [ ] Implement adaptive timeout based on plugin complexity
-- [ ] Add plugin scan retry mechanism for transient failures
+### Tests & coverage
+- [ ] Measure coverage and lift to 80%+ (sqlite_backend and scan_single are thin)
+- [ ] Codify the 289-plugin benchmark from CLAUDE.md as a (skippable) benchmark test
 
-### Documentation
-
-- [ ] Update README.md with new isolated scanner architecture
-- [ ] Document journaling system and crash recovery features
-- [ ] Add API documentation for scanner_isolated module
-- [ ] Create user guide for CLI commands
-- [ ] Document SQLite storage architecture
-
-### Code Quality
-
-- [ ] Refactor `data.py` to focus on data path management
-- [ ] Remove deprecated `json_backend.py` and `migration.py` modules
-- [ ] Add type hints to remaining untyped functions
-- [ ] Improve error messages and user feedback
-- [ ] Clean up unused scanner modules (scanner_clean.py, etc.)
-
-### Testing
-
-- [ ] Add unit tests for ScanJournal class
-- [ ] Create performance regression tests
-- [ ] Test cross-platform compatibility (Windows, Linux)
-- [ ] Add tests for edge cases in plugin parameter extraction
-- [ ] Test concurrent scanning with multiple workers
+### Code quality
+- [ ] Remove dead modules if confirmed unused (scanner_clean.py, json_backend.py, migration.py)
+- [ ] Replace `datetime.utcnow()` in serialization.py with timezone-aware `datetime.now(UTC)`
 
 ### Features
-
-- [ ] Add plugin preset management functionality
-- [ ] Implement plugin categorization and tagging
-- [ ] Add export functionality for different DAW formats
-- [ ] Create web UI for plugin browser
-- [ ] Add plugin search with full-text capabilities
-
-
+- [ ] Plugin categorisation and tagging
+- [ ] Preset management
+- [ ] Adaptive per-plugin timeout based on prior scan time

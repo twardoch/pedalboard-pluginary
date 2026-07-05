@@ -27,8 +27,8 @@ classifiers = [
 ]
 dependencies = [
     "pedalboard>=0.8.7",
-    "fire>=0.5.0",
-    "python-benedict>=0.33.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
     "pyyaml>=6.0.1",
     "typing-extensions>=4.0.0; python_version < '3.11'",
     "tqdm>=4.60.0",
@@ -44,39 +44,35 @@ dev = [
     "pytest>=7.4.4",
     "pytest-cov>=4.1.0",
     "mypy>=1.8.0",
-    "flake8>=7.0.0",
-    "black>=24.1.1",
-    "isort>=5.13.2",
+    "ruff>=0.6.0",
     "psutil>=5.9.0", # Added for memory profiling in tests
     "build>=0.10.0",
     "twine>=4.0.0",
-    "pyinstaller>=5.0.0",
 ]
 
 [project.scripts]
-pbpluginary = "pedalboard_pluginary.__main__:main"
-
-[tool.setuptools]
-packages = ["pedalboard_pluginary"]
-package-dir = {"" = "src"}
+pbpluginary = "pedalboard_pluginary.__main__:cli"
 
 [tool.pytest.ini_options]
-addopts = "--cov=pedalboard_pluginary --cov-report=term-missing"
 testpaths = ["tests"]
 
-[tool.flake8]
-max_line_length = 88
-extend_ignore = "E203,W503"
-exclude = [
-    ".tox",
-    "build",
-    "dist",
-    ".eggs",
-    "docs/conf.py",
+[tool.hatch.envs.hatch-test]
+extra-dependencies = [
+    "pytest-cov>=4.1.0",
+    "psutil>=5.9.0",
 ]
 
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+ignore = ["E203", "B008"]
+
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 mypy_path = "src"
 warn_return_any = true
 warn_unused_configs = true
@@ -91,17 +87,14 @@ warn_no_return = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["fire", "benedict"]
+module = ["pedalboard", "tqdm", "yaml"]
 ignore_missing_imports = true
 
-[tool.black]
-line-length = 88
-target-version = ['py39']
-include = '\.pyi?$'
-
-[tool.isort]
-profile = "black"
-multi_line_output = 3
+# numpy's bundled stubs use 3.12-only syntax; don't type-check into them.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.hatch.version]
 source = "vcs"

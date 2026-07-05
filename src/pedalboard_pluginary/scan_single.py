@@ -10,11 +10,12 @@ It is designed to be called by the main scanner process.
 from __future__ import annotations
 
 import argparse
-import sys
-import os
-import warnings
 import io
+import os
+import sys
+import warnings
 from pathlib import Path
+from typing import Any
 
 # Suppress all warnings and output
 warnings.filterwarnings("ignore")
@@ -23,7 +24,7 @@ os.environ["PYTHONWARNINGS"] = "ignore"
 # Add the parent directory to the path to allow imports from the package
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pedalboard_pluginary.scanner_isolated import ScanJournal
+from pedalboard_pluginary.scanner_isolated import ScanJournal  # noqa: E402
 
 
 def scan_single_plugin(
@@ -31,7 +32,7 @@ def scan_single_plugin(
     plugin_name: str,
     plugin_type: str,
     journal_path: str,
-):
+) -> None:
     """Scan a single plugin and write the result to the journal."""
     journal = ScanJournal(Path(journal_path))
 
@@ -48,7 +49,7 @@ def scan_single_plugin(
     plugin_filename = Path(plugin_path).name
     plugin_data_id = f"{plugin_type}/{Path(plugin_path).stem}"
 
-    result = {
+    result: dict[str, Any] = {
         "id": plugin_data_id,
         "path": plugin_path,
         "name": plugin_name,
@@ -118,7 +119,8 @@ def scan_single_plugin(
         journal.update_status(journal_id, "success", result)
 
     except Exception as e:
-        # We can't know for sure if it's a timeout here, the parent process will handle that.
+        # We can't know for sure if it's a timeout here, the parent process
+        # will handle that.
         # We'll mark it as a generic failure.
         journal.update_status(journal_id, "failed", {"error": str(e)})
 
@@ -130,7 +132,7 @@ def scan_single_plugin(
         journal.close()
 
 
-def main():
+def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Scan a single plugin")
     parser.add_argument("--plugin-path", required=True, help="Path to the plugin")

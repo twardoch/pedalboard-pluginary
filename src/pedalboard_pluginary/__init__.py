@@ -11,3 +11,5 @@ finally:
 
 from .core import PedalboardPluginary
 from .scanner_isolated import IsolatedPedalboardScanner
+
+__all__ = ["PedalboardPluginary", "IsolatedPedalboardScanner"]

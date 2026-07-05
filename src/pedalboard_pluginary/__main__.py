@@ -13,7 +13,7 @@ from .core import PedalboardPluginary
 
 @click.group()
 @click.option("--verbose", is_flag=True, help="Enable verbose logging.")
-def cli(verbose: bool):
+def cli(verbose: bool) -> None:
     """A CLI for scanning and managing audio plugins."""
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
@@ -41,7 +41,9 @@ def cli(verbose: bool):
     default=30,
     help="Timeout in seconds for scanning a single plugin.",
 )
-def scan(rescan: bool, extra_folders: tuple[str], workers: int | None, timeout: int):
+def scan(
+    rescan: bool, extra_folders: tuple[str], workers: int | None, timeout: int
+) -> None:
     """Scan for audio plugins."""
     console = Console()
     console.print("[bold cyan]Initializing plugin scanner...[/bold cyan]")
@@ -66,7 +68,7 @@ def scan(rescan: bool, extra_folders: tuple[str], workers: int | None, timeout: 
 )
 def list_plugins(
     name: str | None, vendor: str | None, plugin_type: str | None, output_format: str
-):
+) -> None:
     """List scanned plugins."""
     console = Console()
     pluginary = PedalboardPluginary()
@@ -102,7 +104,8 @@ def list_plugins(
             print(yaml.dump(plugins, default_flow_style=False, sort_keys=False))
         except ImportError:
             console.print(
-                "[red]YAML output requires PyYAML. Install with: pip install pyyaml[/red]"
+                "[red]YAML output requires PyYAML. "
+                "Install with: pip install pyyaml[/red]"
             )
             return
     else:  # table format
@@ -124,7 +127,7 @@ def list_plugins(
 
 
 @cli.command()
-def info():
+def info() -> None:
     """Display scanner statistics and cache information."""
     from .data import get_cache_path
 
@@ -136,8 +139,8 @@ def info():
     plugin_count = len(plugins)
 
     # Count by type
-    type_counts = {}
-    vendor_counts = {}
+    type_counts: dict[str, int] = {}
+    vendor_counts: dict[str, int] = {}
     for plugin in plugins:
         plugin_type = plugin.get("type", "unknown")
         type_counts[plugin_type] = type_counts.get(plugin_type, 0) + 1
@@ -156,7 +159,7 @@ def info():
             console.print(f"  {ptype}: {count}")
 
     if vendor_counts:
-        console.print(f"\n[bold]Top vendors:[/bold]")
+        console.print("\n[bold]Top vendors:[/bold]")
         for vendor, count in sorted(
             vendor_counts.items(), key=lambda x: x[1], reverse=True
         )[:10]:
@@ -175,12 +178,13 @@ def info():
     if journal_path.exists():
         console.print(f"  [yellow]Active journal found: {journal_path}[/yellow]")
         console.print(
-            "  [yellow]A previous scan may have been interrupted. Run 'scan' to resume.[/yellow]"
+            "  [yellow]A previous scan may have been interrupted. "
+            "Run 'scan' to resume.[/yellow]"
         )
 
 
 @cli.command()
-def clear():
+def clear() -> None:
     """Clear the plugin cache."""
     console = Console()
 
@@ -195,7 +199,7 @@ def clear():
 @cli.command()
 @click.option("--output", "-o", type=click.Path(), help="Output file (default: stdout)")
 @click.option("--pretty", is_flag=True, help="Pretty-print the output")
-def json(output: str | None, pretty: bool):
+def json(output: str | None, pretty: bool) -> None:
     """Export all plugins as JSON."""
     import json as json_module
 
@@ -222,7 +226,7 @@ def json(output: str | None, pretty: bool):
 
 @cli.command()
 @click.option("--output", "-o", type=click.Path(), help="Output file (default: stdout)")
-def yaml(output: str | None):
+def yaml(output: str | None) -> None:
     """Export all plugins as YAML."""
     console = Console()
 
